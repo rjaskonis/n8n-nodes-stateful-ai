@@ -1,0 +1,625 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.StatefulAIAgent = void 0;
+const n8n_workflow_1 = require("n8n-workflow");
+const runnables_1 = require("@langchain/core/runnables");
+const prompts_1 = require("@langchain/core/prompts");
+const output_parsers_1 = require("@langchain/core/output_parsers");
+const agents_1 = require("langchain/agents");
+class StatefulAIAgent {
+    constructor() {
+        this.description = {
+            displayName: 'Stateful AI Agent',
+            name: 'statefulAgent',
+            icon: 'file:statefulaiagent.svg',
+            group: ['transform'],
+            version: 1,
+            subtitle: '={{$parameter["userMessage"]}}',
+            description: 'Advanced AI agent with state management and tool calling capabilities',
+            defaults: {
+                name: 'Stateful AI Agent',
+            },
+            inputs: [
+                n8n_workflow_1.NodeConnectionTypes.Main,
+                {
+                    type: n8n_workflow_1.NodeConnectionTypes.AiLanguageModel,
+                    displayName: 'LLM',
+                    required: true,
+                    maxConnections: 1,
+                },
+                {
+                    type: n8n_workflow_1.NodeConnectionTypes.AiTool,
+                    displayName: 'State',
+                    required: false,
+                    maxConnections: 1,
+                },
+                {
+                    type: n8n_workflow_1.NodeConnectionTypes.AiTool,
+                    displayName: 'Tools',
+                    maxConnections: undefined,
+                },
+            ],
+            outputs: [n8n_workflow_1.NodeConnectionTypes.Main],
+            properties: [
+                {
+                    displayName: 'User Message',
+                    name: 'userMessage',
+                    type: 'string',
+                    default: '',
+                    required: true,
+                    typeOptions: {
+                        rows: 4,
+                    },
+                    description: 'The message from the user that the agent should respond to',
+                },
+                {
+                    displayName: 'System Prompt',
+                    name: 'systemPrompt',
+                    type: 'string',
+                    default: "You're a helpful assistant",
+                    typeOptions: {
+                        rows: 6,
+                    },
+                    description: 'The system prompt that defines the agent\'s behavior and personality',
+                },
+                {
+                    displayName: 'State Model',
+                    name: 'stateModel',
+                    type: 'json',
+                    default: '',
+                    placeholder: '{\n  "field_name": "Description of what this field tracks"\n}',
+                    description: 'JSON object defining the state fields to track. Each key is a field name and value is its description.',
+                },
+                {
+                    displayName: 'Enable Conversation History',
+                    name: 'conversationHistory',
+                    type: 'boolean',
+                    default: false,
+                    description: 'Whether to track and maintain conversation history across interactions',
+                },
+                {
+                    displayName: 'Single Prompt State Tracking',
+                    name: 'singlePromptStateTracking',
+                    type: 'boolean',
+                    default: true,
+                    description: 'Whether to use single prompt mode (faster) or double prompt mode (more accurate state tracking)',
+                },
+            ],
+        };
+    }
+    static formatConversationHistory(history) {
+        if (!Array.isArray(history) || history.length === 0) {
+            return "No previous conversation.";
+        }
+        return history.map(entry => `${entry.role}: ${entry.message}`).join("\n");
+    }
+    static cleanJsonResponse(jsonString) {
+        let cleaned = jsonString.trim();
+        if (cleaned.startsWith('```')) {
+            cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '');
+            cleaned = cleaned.replace(/\n?```\s*$/, '');
+        }
+        return cleaned.trim();
+    }
+    static prepareStateFieldsForTemplate(stateModel, state) {
+        const result = {};
+        for (const key of Object.keys(stateModel)) {
+            const value = (key in state) ? state[key] : null;
+            result[key] = (value === null || value === undefined) ? "" : value;
+        }
+        return result;
+    }
+    static parseToolResult(toolResult) {
+        if (typeof toolResult !== 'string') {
+            return toolResult;
+        }
+        try {
+            return JSON.parse(toolResult);
+        }
+        catch (e) {
+            return toolResult;
+        }
+    }
+    static async invokeTools(toolsToInvoke, agentTools, stateModel, state, stateChangedProps) {
+        const invokedToolNames = [];
+        for (const toolInvocation of toolsToInvoke) {
+            const { tool_name, reason, input_params, state_field } = toolInvocation;
+            const tool = agentTools.find(t => t.name === tool_name || t.name.toLowerCase() === tool_name.toLowerCase());
+            if (!tool) {
+                continue;
+            }
+            try {
+                const toolResult = await tool.invoke(input_params || {});
+                let targetField = state_field;
+                if (!targetField && (tool_name.toLowerCase().includes('steps') || (reason === null || reason === void 0 ? void 0 : reason.toLowerCase().includes('steps')))) {
+                    targetField = 'task_steps';
+                }
+                if (targetField && targetField in stateModel) {
+                    const parsedResult = StatefulAIAgent.parseToolResult(toolResult);
+                    if (JSON.stringify(state[targetField]) !== JSON.stringify(parsedResult)) {
+                        state[targetField] = parsedResult;
+                        if (!stateChangedProps.includes(targetField)) {
+                            stateChangedProps.push(targetField);
+                        }
+                    }
+                }
+                invokedToolNames.push(tool_name);
+            }
+            catch (error) {
+            }
+        }
+        return invokedToolNames;
+    }
+    static validateAndExtractState(parsedResult, stateModel, state, prevStateModelOnly, stateChangedProps, isFirstRun) {
+        const newState = parsedResult.state || {};
+        for (const key of Object.keys(stateModel)) {
+            if (!(key in newState)) {
+                newState[key] = null;
+            }
+            state[key] = newState[key];
+        }
+        const changedProps = Object.keys(stateModel).filter(key => {
+            const prevValue = prevStateModelOnly[key];
+            const newValue = state[key];
+            return JSON.stringify(prevValue) !== JSON.stringify(newValue);
+        });
+        if (isFirstRun && changedProps.length === 0) {
+            return Object.keys(stateModel);
+        }
+        return changedProps;
+    }
+    async execute() {
+        const items = this.getInputData();
+        const returnData = [];
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+            try {
+                const userMessage = this.getNodeParameter('userMessage', itemIndex);
+                const systemPrompt = this.getNodeParameter('systemPrompt', itemIndex, "You're a helpful assistant");
+                const stateModelStr = this.getNodeParameter('stateModel', itemIndex, '');
+                const conversationHistory = this.getNodeParameter('conversationHistory', itemIndex, false);
+                const singlePromptStateTracking = this.getNodeParameter('singlePromptStateTracking', itemIndex, true);
+                let stateModel = null;
+                if (stateModelStr && stateModelStr.trim()) {
+                    try {
+                        stateModel = JSON.parse(stateModelStr);
+                    }
+                    catch (error) {
+                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Invalid State Model JSON: ${error.message}`, {
+                            itemIndex,
+                        });
+                    }
+                }
+                const llm = (await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiLanguageModel, 0));
+                if (!llm) {
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'LLM is required but not connected', {
+                        itemIndex,
+                    });
+                }
+                let stateManagementTool = null;
+                try {
+                    const stateConnection = await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiTool, 0);
+                    if (stateConnection) {
+                        stateManagementTool = Array.isArray(stateConnection) ? stateConnection[0] : stateConnection;
+                    }
+                }
+                catch (error) {
+                    stateManagementTool = null;
+                }
+                let agentTools = [];
+                try {
+                    const toolsConnection = await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiTool, 1);
+                    if (toolsConnection) {
+                        agentTools = Array.isArray(toolsConnection) ? toolsConnection : [toolsConnection];
+                    }
+                }
+                catch (error) {
+                    agentTools = [];
+                }
+                if (!userMessage) {
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'User Message is required', {
+                        itemIndex,
+                    });
+                }
+                let prevState = {};
+                let state = {};
+                let stateChangedProps = [];
+                if (stateModel || conversationHistory) {
+                    if (!stateManagementTool) {
+                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'State connection is required but not connected. Please connect a sub-workflow to the State input.', {
+                            itemIndex,
+                        });
+                    }
+                    const stateManagementResponse = await stateManagementTool.invoke({
+                        operation: "get",
+                        content: ""
+                    });
+                    const parsedResponse = JSON.parse(stateManagementResponse);
+                    const previousStateData = Array.isArray(parsedResponse) ? parsedResponse[0] : parsedResponse;
+                    prevState = previousStateData || {};
+                }
+                let conversationHistoryValue = null;
+                if (conversationHistory) {
+                    conversationHistoryValue = prevState.conversation_history || [];
+                }
+                let response = '';
+                let stateFieldDescriptions = "";
+                let prevStateModelOnly = {};
+                let isFirstRun = false;
+                if (stateModel) {
+                    const prevStateHasFields = Object.keys(stateModel).some(key => key in prevState);
+                    isFirstRun = !prevStateHasFields;
+                    for (const key of Object.keys(stateModel)) {
+                        prevStateModelOnly[key] = (key in prevState) ? prevState[key] : null;
+                    }
+                    stateFieldDescriptions = Object.entries(stateModel)
+                        .map(([key, description]) => `- ${key}: ${description}`)
+                        .join("\n");
+                }
+                const availableToolsDesc = agentTools.length > 0
+                    ? agentTools.map(tool => `- ${tool.name}: ${tool.description || 'No description available'}`).join("\n")
+                    : "No tools available";
+                const useAgent = agentTools.length > 0;
+                if (stateModel && singlePromptStateTracking) {
+                    const combinedPrompt = prompts_1.PromptTemplate.fromTemplate(`
+${systemPrompt}
+
+State Model (fields to track):
+{stateFields}
+
+Current State:
+{currentState}
+
+${useAgent ? `
+Available Tools (you can request to use these if needed):
+{availableTools}
+` : ''}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+User: {user_message}
+
+Instructions:
+1. Analyze the user message and update state fields based on the state model
+2. For each field in the state model, determine its value from the user message or keep the previous value
+3. ${useAgent ? 'If you need external data to populate state fields or answer the user, specify which tools to invoke' : 'Provide a helpful response'}
+4. Provide a natural, helpful response to the user
+
+Respond with ONLY a valid JSON object in the following format:
+{{
+  "state": {{
+    // Complete state object with all fields from state model
+  }},
+  ${useAgent ? `"tools_to_invoke": [
+    // Array of tool invocation objects, or empty array if no tools needed
+    // Only request tools if you truly need external data
+    {{
+      "tool_name": "Tool Name",
+      "reason": "Why this tool is needed",
+      "state_field": "field_name",
+      "input_params": {{}}
+    }}
+  ],` : ''}
+  "response": "Your helpful and natural response to the user"
+}}
+`);
+                    const combinedChain = runnables_1.RunnableSequence.from([
+                        combinedPrompt,
+                        llm,
+                        new output_parsers_1.StringOutputParser(),
+                    ]);
+                    const stateFieldsForTemplate = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, prevStateModelOnly);
+                    const inputVariables = {
+                        user_message: userMessage,
+                        stateFields: stateFieldDescriptions,
+                        currentState: Object.keys(prevStateModelOnly).length > 0 ? JSON.stringify(prevStateModelOnly, null, 2) : "{}",
+                        ...stateFieldsForTemplate
+                    };
+                    if (useAgent) {
+                        inputVariables.availableTools = availableToolsDesc;
+                    }
+                    if (conversationHistory && conversationHistoryValue) {
+                        inputVariables.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
+                    }
+                    const combinedResult = await combinedChain.invoke(inputVariables);
+                    let toolsToInvoke = [];
+                    try {
+                        const cleanedResult = StatefulAIAgent.cleanJsonResponse(combinedResult);
+                        const parsedResult = JSON.parse(cleanedResult);
+                        stateChangedProps = StatefulAIAgent.validateAndExtractState(parsedResult, stateModel, state, prevStateModelOnly, stateChangedProps, isFirstRun);
+                        response = parsedResult.response || "";
+                        if (useAgent) {
+                            toolsToInvoke = parsedResult.tools_to_invoke || [];
+                            if (!Array.isArray(toolsToInvoke)) {
+                                toolsToInvoke = [];
+                            }
+                        }
+                    }
+                    catch (error) {
+                        throw new Error(`Failed to parse combined JSON: ${error.message}`);
+                    }
+                    if (toolsToInvoke.length > 0) {
+                        const invokedToolNames = await StatefulAIAgent.invokeTools(toolsToInvoke, agentTools, stateModel, state, stateChangedProps);
+                        if (invokedToolNames.length > 0) {
+                            const refinementPrompt = prompts_1.PromptTemplate.fromTemplate(`
+${systemPrompt}
+
+Updated State (after tool invocations):
+{updatedState}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+User: {user_message}
+
+The following tools were invoked to gather information:
+{toolsInvoked}
+
+Now provide a complete, natural response to the user based on the updated state and tool results.
+Respond with ONLY the response text (not JSON).
+`);
+                            const refinementChain = runnables_1.RunnableSequence.from([
+                                refinementPrompt,
+                                llm,
+                                new output_parsers_1.StringOutputParser(),
+                            ]);
+                            const toolsInvokedDesc = invokedToolNames
+                                .map((name, idx) => `${idx + 1}. ${name}`)
+                                .join('\n');
+                            const stateModelFields = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
+                            const refinementInput = {
+                                user_message: userMessage,
+                                updatedState: JSON.stringify(state, null, 2),
+                                toolsInvoked: toolsInvokedDesc,
+                                ...stateModelFields
+                            };
+                            if (conversationHistory && conversationHistoryValue) {
+                                refinementInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
+                            }
+                            response = await refinementChain.invoke(refinementInput);
+                        }
+                    }
+                }
+                else if (stateModel && !singlePromptStateTracking) {
+                    const stateAnalysisPrompt = prompts_1.PromptTemplate.fromTemplate(`
+You are analyzing a user message to update the conversation state and determine which tools should be invoked.
+
+State Model (fields to track):
+{stateFields}
+
+Current State:
+{currentState}
+
+${useAgent ? `
+Available Tools (name and description):
+{availableTools}
+` : ''}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+User Message: {userMessage}
+
+Instructions:
+1. Analyze the user message and determine the new state values based on the state model
+2. For each field in the state model, determine its current value based on the user message and previous state
+3. If a value hasn't changed or can't be determined from the message, keep the previous value
+${useAgent ? `4. Identify which tools should be invoked to populate any state fields that require external data
+5. For each tool that should be invoked, specify:
+   - tool_name: the exact name of the tool
+   - reason: why this tool should be invoked
+   - state_field: which state field will be populated by this tool's result
+   - input_params: the parameters to pass to the tool (as a JSON object)` : ''}
+
+Respond with ONLY a valid JSON object in the following format:
+{{
+  "state": {{
+    // Complete state object with all fields from state model
+  }}${useAgent ? `,
+  "tools_to_invoke": [
+    // Array of tool invocation objects, or empty array if no tools needed
+    {{
+      "tool_name": "Tool Name",
+      "reason": "Reason for invocation",
+      "state_field": "field_name",
+      "input_params": {{}}
+    }}
+  ]` : ''}
+}}
+`);
+                    const stateAnalysisChain = runnables_1.RunnableSequence.from([
+                        stateAnalysisPrompt,
+                        llm,
+                        new output_parsers_1.StringOutputParser(),
+                    ]);
+                    const stateAnalysisInput = {
+                        stateFields: stateFieldDescriptions,
+                        currentState: Object.keys(prevStateModelOnly).length > 0 ? JSON.stringify(prevStateModelOnly, null, 2) : "{}",
+                        userMessage: userMessage,
+                    };
+                    if (useAgent) {
+                        stateAnalysisInput.availableTools = availableToolsDesc;
+                    }
+                    if (conversationHistory && conversationHistoryValue) {
+                        stateAnalysisInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
+                    }
+                    const stateAnalysisResult = await stateAnalysisChain.invoke(stateAnalysisInput);
+                    let toolsToInvoke = [];
+                    try {
+                        const cleanedResult = StatefulAIAgent.cleanJsonResponse(stateAnalysisResult);
+                        const parsedResult = JSON.parse(cleanedResult);
+                        stateChangedProps = StatefulAIAgent.validateAndExtractState(parsedResult, stateModel, state, prevStateModelOnly, stateChangedProps, isFirstRun);
+                        if (useAgent) {
+                            toolsToInvoke = parsedResult.tools_to_invoke || [];
+                            if (!Array.isArray(toolsToInvoke)) {
+                                toolsToInvoke = [];
+                            }
+                        }
+                    }
+                    catch (error) {
+                        throw new Error(`Failed to parse state analysis JSON: ${error.message}`);
+                    }
+                    if (toolsToInvoke.length > 0) {
+                        await StatefulAIAgent.invokeTools(toolsToInvoke, agentTools, stateModel, state, stateChangedProps);
+                    }
+                    const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
+                    const responsePrompt = prompts_1.PromptTemplate.fromTemplate(`
+${systemPrompt}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+User: {user_message}
+
+Provide a helpful and natural response.
+`);
+                    const responseChain = runnables_1.RunnableSequence.from([
+                        responsePrompt,
+                        llm,
+                        new output_parsers_1.StringOutputParser(),
+                    ]);
+                    const responseInput = {
+                        user_message: userMessage,
+                        ...stateFieldsForPrompt
+                    };
+                    if (conversationHistory && conversationHistoryValue) {
+                        responseInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
+                    }
+                    response = await responseChain.invoke(responseInput);
+                }
+                else {
+                    const stateForTemplate = {};
+                    for (const [key, value] of Object.entries(state)) {
+                        if (key !== 'conversation_history') {
+                            stateForTemplate[key] = (value === null || value === undefined) ? "" : value;
+                        }
+                    }
+                    const inputVariables = {
+                        user_message: userMessage,
+                        ...stateForTemplate
+                    };
+                    if (conversationHistory && conversationHistoryValue) {
+                        inputVariables.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
+                    }
+                    if (useAgent) {
+                        const agentPrompt = prompts_1.PromptTemplate.fromTemplate(`
+${systemPrompt}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+You have access to various tools that can help you answer questions and perform tasks.
+Use the appropriate tools when needed to provide accurate and helpful responses.
+
+User: {user_message}
+
+Think step-by-step and use tools when they would be helpful.
+
+{agent_scratchpad}
+`);
+                        try {
+                            const agent = await (0, agents_1.createToolCallingAgent)({
+                                llm: llm,
+                                tools: agentTools,
+                                prompt: agentPrompt,
+                            });
+                            const agentExecutorConfig = {
+                                agent,
+                                tools: agentTools,
+                                verbose: true,
+                                maxIterations: 10,
+                                returnIntermediateSteps: false,
+                            };
+                            const agentExecutor = new agents_1.AgentExecutor(agentExecutorConfig);
+                            const result = await agentExecutor.invoke(inputVariables);
+                            response = result.output;
+                        }
+                        catch (error) {
+                            throw new Error(`Agent failed: ${error.message}`);
+                        }
+                    }
+                    else {
+                        const simplePrompt = prompts_1.PromptTemplate.fromTemplate(`
+${systemPrompt}
+
+${conversationHistory ? `
+Previous Conversation:
+{conversation_history}
+` : ''}
+
+User: {user_message}
+
+Provide a helpful and natural response.
+`);
+                        const chain = runnables_1.RunnableSequence.from([
+                            simplePrompt,
+                            llm,
+                            new output_parsers_1.StringOutputParser(),
+                        ]);
+                        response = await chain.invoke(inputVariables);
+                    }
+                }
+                if (conversationHistory && conversationHistoryValue) {
+                    conversationHistoryValue.push({
+                        role: "user",
+                        message: userMessage
+                    });
+                    conversationHistoryValue.push({
+                        role: "assistant",
+                        message: response
+                    });
+                    state.conversation_history = conversationHistoryValue;
+                    if (!stateChangedProps.includes('conversation_history')) {
+                        stateChangedProps.push('conversation_history');
+                    }
+                }
+                if (stateManagementTool && stateChangedProps.length > 0) {
+                    await stateManagementTool.invoke({
+                        operation: "set",
+                        content: JSON.stringify(state),
+                    });
+                }
+                returnData.push({
+                    json: {
+                        response: response,
+                        state: state,
+                        prevState: prevState,
+                        stateChangedProps: stateChangedProps,
+                    },
+                    pairedItem: itemIndex,
+                });
+            }
+            catch (error) {
+                if (this.continueOnFail()) {
+                    returnData.push({
+                        json: { error: error.message },
+                        error,
+                        pairedItem: itemIndex
+                    });
+                }
+                else {
+                    if (error.context) {
+                        error.context.itemIndex = itemIndex;
+                        throw error;
+                    }
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), error, {
+                        itemIndex,
+                    });
+                }
+            }
+        }
+        return [returnData];
+    }
+}
+exports.StatefulAIAgent = StatefulAIAgent;
+//# sourceMappingURL=StatefulAIAgent.node.js.map
