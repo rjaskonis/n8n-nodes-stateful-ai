@@ -39,8 +39,8 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/rjaskonis/n8n-nodes-stateful-agent.git
-   cd n8n-nodes-stateful-agent
+   git clone https://github.com/rjaskonis/n8n-nodes-stateful-ai.git
+   cd n8n-nodes-stateful-ai
    ```
 
 2. Install dependencies:
@@ -432,7 +432,7 @@ The compiled nodes will be in the `dist` folder.
 - [n8n Community Nodes Documentation](https://docs.n8n.io/integrations/#community-nodes)
 - [LangChain Documentation](https://js.langchain.com/)
 - [Detailed Usage Guide](./STATEFUL_AGENT_USAGE.md)
-- [GitHub Repository](https://github.com/rjaskonis/n8n-nodes-stateful-agent)
+- [GitHub Repository](https://github.com/rjaskonis/n8n-nodes-stateful-ai)
 
 ## License
 

@@ -100,7 +100,7 @@ npm link
 
 # In your n8n directory
 cd /path/to/n8n
-npm link n8n-nodes-stateful-agent
+npm link n8n-nodes-stateful-ai
 ```
 
 ## 📖 Usage Examples
