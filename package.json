@@ -32,7 +32,7 @@
         "strict": true,
         "credentials": [],
         "nodes": [
-            "dist/nodes/Stuff/Stuff.node.js",
+            "dist/nodes/AIStateHandler/AIStateHandler.node.js",
             "dist/nodes/StatefulAIAgent/StatefulAIAgent.node.js"
         ]
     },
