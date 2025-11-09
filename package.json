@@ -1,6 +1,6 @@
 {
     "name": "n8n-nodes-stateful-ai",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "Advanced AI agent node with state management and tool calling capabilities for n8n",
     "license": "MIT",
     "homepage": "https://github.com/rjaskonis/n8n-nodes-stateful-ai#readme",
