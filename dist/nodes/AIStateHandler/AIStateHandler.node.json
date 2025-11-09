@@ -2,7 +2,13 @@
     "node": "n8n-nodes-base.aiStateHandler",
     "nodeVersion": "1.0",
     "codexVersion": "1.0",
-    "categories": ["Core Nodes"],
+    "categories": ["AI"],
+    "codex": {
+        "categories": ["AI"],
+        "subcategories": {
+            "AI": ["Tools"]
+        }
+    },
     "resources": {
         "primaryDocumentation": [
             {

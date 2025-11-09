@@ -3,11 +3,13 @@ import type {
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
+	IDataObject,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import { RunnableSequence } from '@langchain/core/runnables';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
+
 
 export class AIStateHandler implements INodeType {
 	description: INodeTypeDescription = {
@@ -18,6 +20,12 @@ export class AIStateHandler implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["message"]}}',
 		description: 'Intelligent state management for AI conversations',
+		codex: {
+			categories: ['AI'],
+			subcategories: {
+				AI: ['Tools'],
+			},
+		},
 		defaults: {
 			name: 'AI State Handler',
 		},
@@ -31,18 +39,34 @@ export class AIStateHandler implements INodeType {
 			},
 			{
 				type: NodeConnectionTypes.AiTool,
-				displayName: 'State',
-				required: true,
-				maxConnections: 1,
-			},
-			{
-				type: NodeConnectionTypes.AiTool,
 				displayName: 'Tools',
 				maxConnections: undefined,
 			},
 		],
 		outputs: [NodeConnectionTypes.Main],
 		properties: [
+			{
+				displayName: 'State Management Workflow',
+				name: 'stateWorkflowId',
+				type: 'workflowSelector',
+				default: '',
+				required: true,
+				description: 'Select the workflow that handles state storage. The workflow must have an Execute Workflow Trigger with "operation" (supporting "get" and "set" values) and "content" input fields.',
+			},
+			{
+				displayName: 'This node will send "get" or "set" to the "operation" field and the state content to the "content" field when calling the State Management Workflow. By using this workflow approach, you can track and store state in any way you prefer - whether it\'s in a database, file system, cloud storage, or any other storage solution that fits your needs.',
+				name: 'stateWorkflowInfo',
+				type: 'notice',
+				default: '',
+			},
+			{
+				displayName: 'Session ID',
+				name: 'sessionId',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Unique identifier for the conversation session',
+			},
 			{
 				displayName: 'Role',
 				name: 'role',
@@ -58,32 +82,26 @@ export class AIStateHandler implements INodeType {
 					},
 				],
 				default: 'user',
-				description: 'The role of the message sender. User messages trigger full analysis with tools, System messages directly update state.',
+				description: 'The role to process (user message or system extraction)',
 			},
 			{
 				displayName: 'Message',
 				name: 'message',
 				type: 'string',
-				default: '',
+				default: '={{ $json.message }}',
 				required: true,
-				typeOptions: {
-					rows: 4,
-				},
-				description: 'The message to process for state updates',
+				description: 'The message to process',
 			},
 			{
 				displayName: 'State Model',
 				name: 'stateModel',
 				type: 'json',
-				default: '',
-				required: true,
-				placeholder: '{\n  "field_name": "Description of what this field tracks"\n}',
-				description: 'JSON object defining the state fields to track. Each key is a field name and value is its description.',
+				default: '{\n  "name": "User name"\n}',
+				description: 'JSON object defining the state structure and descriptions',
 			},
 		],
 	};
 
-	// Helper Methods
 	static cleanJsonResponse(jsonString: string): string {
 		let cleaned = jsonString.trim();
 		if (cleaned.startsWith('```')) {
@@ -110,14 +128,10 @@ export class AIStateHandler implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				// ============================================
-				// Get Inputs
-				// ============================================
 				const message = this.getNodeParameter('message', itemIndex) as string;
 				const stateModelStr = this.getNodeParameter('stateModel', itemIndex) as string;
 				const role = this.getNodeParameter('role', itemIndex, 'user') as string;
 
-				// Validate required inputs
 				if (!message) {
 					throw new NodeOperationError(this.getNode(), 'message is required but was not provided', {
 						itemIndex,
@@ -130,7 +144,6 @@ export class AIStateHandler implements INodeType {
 					});
 				}
 
-				// Parse state model
 				let stateModel: Record<string, string>;
 				try {
 					stateModel = JSON.parse(stateModelStr);
@@ -140,7 +153,6 @@ export class AIStateHandler implements INodeType {
 					});
 				}
 
-				// Get AI connections
 				const llm = (await this.getInputConnectionData(NodeConnectionTypes.AiLanguageModel, 0)) as any;
 				if (!llm) {
 					throw new NodeOperationError(this.getNode(), 'LLM is required but not connected', {
@@ -148,53 +160,69 @@ export class AIStateHandler implements INodeType {
 					});
 				}
 
-				// Get State Management Tool
-				let stateManagementTool: any = null;
-				try {
-					const stateConnection = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 0);
-					if (stateConnection) {
-						stateManagementTool = Array.isArray(stateConnection) ? stateConnection[0] : stateConnection;
-					}
-				} catch (error) {
-					stateManagementTool = null;
-				}
+				const stateWorkflowIdParam = this.getNodeParameter('stateWorkflowId', itemIndex);
+				const stateWorkflowId = typeof stateWorkflowIdParam === 'object' && stateWorkflowIdParam !== null
+					? (stateWorkflowIdParam as IDataObject).value as string
+					: stateWorkflowIdParam as string;
 
-				if (!stateManagementTool) {
-					throw new NodeOperationError(this.getNode(), 'State Management Tool is required but not connected', {
+				const sessionId = this.getNodeParameter('sessionId', itemIndex) as string;
+
+				if (!stateWorkflowId) {
+					throw new NodeOperationError(this.getNode(), 'State Management Workflow is required. Please select a workflow.', {
 						itemIndex,
 					});
 				}
 
-				// Get tools from Tools connection
-				let agentTools: any[] = [];
-				try {
-					const toolsConnection = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 1);
-					if (toolsConnection) {
-						agentTools = Array.isArray(toolsConnection) ? toolsConnection : [toolsConnection];
-					}
-				} catch (error) {
-					agentTools = [];
+				if (!sessionId) {
+					throw new NodeOperationError(this.getNode(), 'Session ID is required. Please provide a session identifier.', {
+						itemIndex,
+					});
 				}
 
-				// ============================================
-				// Get Previous State
-				// ============================================
-				const stateManagementResponse = await stateManagementTool.invoke({
-					operation: "get",
-					content: ""
-				});
 
-				const parsedResponse = JSON.parse(stateManagementResponse);
-				const previousStateData = Array.isArray(parsedResponse) ? parsedResponse[0] : parsedResponse;
-				const prevState: Record<string, any> = previousStateData || {};
+				let agentTools: any[] = [];
+				try {
+					const toolsResult = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 0);
+					if (toolsResult) {
+						if (Array.isArray(toolsResult)) {
+							agentTools = toolsResult.filter((tool: any) => tool && typeof tool.invoke === 'function');
+						} else if (typeof (toolsResult as any).invoke === 'function') {
+							agentTools = [toolsResult];
+						}
+					}
+				} catch (error) {
+					// Tools are optional, continue without them
+				}
 
-				// ============================================
-				// Initialize State Variables
-				// ============================================
+				const callStateWorkflow = async (operation: string, content: string = '') => {
+					const inputData: IDataObject = {
+						sessionId,
+						operation,
+						content,
+					};
+
+					const result = await this.executeWorkflow(
+						{ id: stateWorkflowId },
+						[{
+							json: inputData
+						}]
+					);
+
+					if (!result?.data?.[0]?.[0]) {
+						throw new NodeOperationError(this.getNode(), 'State Management workflow returned no data', {
+							itemIndex,
+						});
+					}
+
+					return result.data[0][0].json;
+				};
+
+				const stateData = await callStateWorkflow("get");
+				const prevState: Record<string, any> = stateData || {};
+
 				let state: Record<string, any> = {};
 				let stateChangedProps: string[] = [];
 
-				// Extract only state_model fields from previous state
 				const prevStateModelOnly: Record<string, any> = {};
 				for (const key of Object.keys(stateModel)) {
 					if (key in prevState) {
@@ -206,13 +234,7 @@ export class AIStateHandler implements INodeType {
 					.map(([key, description]) => `- ${key}: ${description}`)
 					.join("\n");
 
-				// ============================================
-				// Handle Different Roles
-				// ============================================
 				if (role !== 'user') {
-					// ============================================
-					// SYSTEM ROLE: Direct state update
-					// ============================================
 					const systemStatePrompt = PromptTemplate.fromTemplate(`
 You are updating the conversation state based on a system message.
 
@@ -225,10 +247,17 @@ Current State:
 System Message: {systemMessage}
 
 Instructions:
-1. Analyze the system message and update the state values based on the state model
-2. For each field in the state model, determine its current value based on the system message and previous state
-3. If a value hasn't changed or can't be determined from the message, keep the previous value
-4. Return the complete updated state
+1. Analyze the system message CAREFULLY and update the state values based on the state model
+2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the message. Do NOT make assumptions or infer values from ambiguous content.
+3. IMPORTANT extraction rules:
+   - For name fields: Only extract if the message explicitly contains a name (e.g., "User's name is John", "Set name to Maria"). Do NOT extract names from greetings, casual expressions, or ambiguous content.
+   - For other fields: Only extract if the message contains clear, unambiguous information related to that field's description. If the message is vague, ambiguous, or doesn't contain relevant information, keep the previous value or set to null.
+   - Consider context: Be aware that words in different languages may have different meanings. A greeting in one language should not be mistaken for a name or other field value.
+   - Language awareness: Be aware that words in different languages may have different meanings. Only extract values when there is clear, explicit information.
+4. For each field in the state model, determine its current value based on the system message and previous state:
+   - If the message contains clear, explicit information about the field, update it
+   - If the value hasn't changed or can't be determined from the message, keep the previous value (or null if no previous value exists)
+5. Return the complete updated state
 
 Respond with ONLY a valid JSON object representing the complete state (all fields from state model):
 {{
@@ -254,24 +283,20 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 						const cleanedResult = AIStateHandler.cleanJsonResponse(systemStateResult);
 						state = JSON.parse(cleanedResult);
 
-						// Validate all state_model keys exist
 						for (const key of Object.keys(stateModel)) {
 							if (!(key in state)) {
 								state[key] = null;
 							}
 						}
 
-						// Add system_last_message to the state
 						state.system_last_message = message;
 
-						// Track changed values (only for state_model fields)
 						stateChangedProps = Object.keys(stateModel).filter(key => {
 							const prevValue = prevStateModelOnly[key];
 							const newValue = state[key];
 							return JSON.stringify(prevValue) !== JSON.stringify(newValue);
 						});
 
-						// Check if system_last_message changed
 						if (prevState.system_last_message !== message) {
 							stateChangedProps.push('system_last_message');
 						}
@@ -282,15 +307,10 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 						});
 					}
 
-					// Save State
 					if (stateChangedProps.length > 0) {
-						await stateManagementTool.invoke({
-							operation: "set",
-							content: JSON.stringify(state),
-						});
+						await callStateWorkflow("set", JSON.stringify(state));
 					}
 
-					// Return Output for system role
 					returnData.push({
 						json: {
 							state: state,
@@ -299,24 +319,16 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 							role: role,
 							message: stateChangedProps.length > 0
 								? `System state updated successfully. Changed fields: ${stateChangedProps.join(", ")}`
-								: "No state changes detected"
+								: "No state changes detected",
 						},
 						pairedItem: itemIndex,
 					});
 
 				} else {
-					// ============================================
-					// USER ROLE: Full LLM analysis with tools
-					// ============================================
+					const availableToolsDesc = agentTools.map(tool =>
+						`- ${tool.name}: ${tool.description || 'No description available'}`
+					).join("\n");
 
-					// Prepare available tools description
-					const availableToolsDesc = agentTools.map(tool => {
-						return `- ${tool.name}: ${tool.description || 'No description available'}`;
-					}).join("\n");
-
-					// ============================================
-					// Combined: Update State & Identify Tools to Invoke
-					// ============================================
 					const stateAndToolsPrompt = PromptTemplate.fromTemplate(`
 You are analyzing a user message to update the conversation state and determine which tools should be invoked to populate missing information.
 
@@ -332,16 +344,23 @@ Available Tools (name and description):
 User Message: {userMessage}
 
 Instructions:
-1. Analyze the user message and determine the new state values based on the state model
-2. For each field in the state model, determine its current value based on the user message and previous state
-3. If a value hasn't changed or can't be determined from the message, keep the previous value
-4. Identify which tools should be invoked to populate any state fields that require external data
-5. For each tool that should be invoked, specify:
+1. Analyze the user message CAREFULLY and determine the new state values based on the state model
+2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the message. Do NOT make assumptions or infer values from ambiguous content.
+3. IMPORTANT extraction rules:
+   - For name fields: Only extract if the user explicitly introduces themselves (e.g., "My name is John", "I'm Maria", "Call me Sarah"). Do NOT extract names from greetings (e.g., "Ola", "Hello", "Hi"), casual expressions, or single words that might be names but are actually greetings or other words in different languages.
+   - For other fields: Only extract if the message contains clear, unambiguous information related to that field's description. If the message is vague, ambiguous, or doesn't contain relevant information, keep the previous value or set to null.
+   - Consider context: A single word like "Ola" is a greeting in Portuguese, not a name. Only extract names when the user explicitly states their name or introduces themselves.
+   - Language awareness: Be aware that words in different languages may have different meanings. A greeting in one language should not be mistaken for a name.
+4. For each field in the state model, determine its current value based on the user message and previous state:
+   - If the message contains clear, explicit information about the field, update it
+   - If the value hasn't changed or can't be determined from the message, keep the previous value (or null if no previous value exists)
+5. Identify which tools should be invoked to populate any state fields that require external data
+6. For each tool that should be invoked, specify:
    - tool_name: the exact name of the tool
    - reason: why this tool should be invoked
    - state_field: which state field will be populated by this tool's result
    - input_params: the parameters to pass to the tool (as a JSON object)
-6. IMPORTANT: Identify state fields that depend on tool results or other state fields and cannot be fully determined until after tools are invoked.
+7. IMPORTANT: Identify state fields that depend on tool results or other state fields and cannot be fully determined until after tools are invoked.
    For example:
    - A field that should be "the first element" of an array populated by a tool
    - A field that depends on processing tool results
@@ -383,9 +402,6 @@ Respond with ONLY a valid JSON object in the following format:
 						userMessage: message,
 					});
 
-					// ============================================
-					// Parse Result and Update State
-					// ============================================
 					let toolsToInvoke: any[] = [];
 					let stateFieldsWithDependencies = new Set<string>();
 
@@ -393,33 +409,23 @@ Respond with ONLY a valid JSON object in the following format:
 						const cleanedResult = AIStateHandler.cleanJsonResponse(stateAndToolsResult);
 						const parsedResult = JSON.parse(cleanedResult);
 
-						// Extract state
 						state = parsedResult.state || {};
 
-						// Validate all state_model keys exist
 						for (const key of Object.keys(stateModel)) {
 							if (!(key in state)) {
 								state[key] = null;
 							}
 						}
 
-						// Track changed values (only for state_model fields)
 						stateChangedProps = Object.keys(stateModel).filter(key => {
 							const prevValue = prevStateModelOnly[key];
 							const newValue = state[key];
 							return JSON.stringify(prevValue) !== JSON.stringify(newValue);
 						});
 
-						// Extract tools to invoke
-						toolsToInvoke = parsedResult.tools_to_invoke || [];
+						toolsToInvoke = Array.isArray(parsedResult.tools_to_invoke) ? parsedResult.tools_to_invoke : [];
 
-						if (!Array.isArray(toolsToInvoke)) {
-							toolsToInvoke = [];
-						}
-
-						// Extract fields needing post-analysis
 						const fieldsNeedingPostAnalysis = parsedResult.fields_needing_post_analysis || [];
-
 						if (Array.isArray(fieldsNeedingPostAnalysis)) {
 							fieldsNeedingPostAnalysis.forEach((field: string) => {
 								if (field in stateModel) {
@@ -434,37 +440,27 @@ Respond with ONLY a valid JSON object in the following format:
 						});
 					}
 
-					// ============================================
-					// Invoke Identified Tools and Update State
-					// ============================================
 					const invokedToolResults: any[] = [];
 
 					if (toolsToInvoke.length > 0) {
 						for (const toolInvocation of toolsToInvoke) {
 							const { tool_name, reason, input_params, state_field } = toolInvocation;
 
-							// Find the tool by name
 							const tool = agentTools.find(t => t.name === tool_name || t.name.toLowerCase() === tool_name.toLowerCase());
-
 							if (!tool) {
 								continue;
 							}
 
 							try {
-								// Invoke the tool
 								const toolResult = await tool.invoke(input_params || {});
 
-								// Store tool result for output
 								invokedToolResults.push({
 									tool_name,
 									state_field,
 									result: toolResult
 								});
 
-								// Directly update state with tool result
 								let targetField = state_field;
-
-								// If no state_field specified, try to infer from reason or tool name
 								if (!targetField) {
 									if (tool_name.toLowerCase().includes('steps') || reason?.toLowerCase().includes('steps')) {
 										targetField = 'task_steps';
@@ -474,7 +470,6 @@ Respond with ONLY a valid JSON object in the following format:
 								if (targetField && targetField in stateModel) {
 									const parsedResult = AIStateHandler.parseToolResult(toolResult);
 
-									// Update the specific state field
 									if (JSON.stringify(state[targetField]) !== JSON.stringify(parsedResult)) {
 										state[targetField] = parsedResult;
 										if (!stateChangedProps.includes(targetField)) {
@@ -487,23 +482,20 @@ Respond with ONLY a valid JSON object in the following format:
 								invokedToolResults.push({
 									tool_name,
 									state_field,
-									error: error.message
+									error: (error as Error).message
 								});
 							}
 						}
 					}
 
-					// ============================================
-					// Post-Tool Processing: Re-analyze State with Tool Results
-					// ============================================
 					const needsPostToolAnalysis = invokedToolResults.length > 0 && stateFieldsWithDependencies.size > 0;
 
 					if (needsPostToolAnalysis) {
-						const toolResultsSummary = invokedToolResults.map(result => {
-							return `Tool: ${result.tool_name}
+						const toolResultsSummary = invokedToolResults.map(result =>
+							`Tool: ${result.tool_name}
 Target State Field: ${result.state_field || 'not specified'}
-Result: ${JSON.stringify(result.result || result.error, null, 2)}`;
-						}).join('\n\n');
+Result: ${JSON.stringify(result.result || result.error, null, 2)}`
+						).join('\n\n');
 
 						const postToolStatePrompt = PromptTemplate.fromTemplate(`
 You are analyzing tool results to update any remaining state fields that can now be determined.
@@ -520,11 +512,14 @@ Tool Invocation Results:
 User Message (for context): {userMessage}
 
 Instructions:
-1. Review the current state and tool results
-2. Identify any state fields that are currently null/unset but can now be determined from the tool results
-3. Update those fields based on the tool results and state model descriptions
-4. For fields that still cannot be determined, leave them as-is
-5. Return the complete updated state
+1. Review the current state and tool results CAREFULLY
+2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the tool results. Do NOT make assumptions or infer values from ambiguous content.
+3. Identify any state fields that are currently null/unset but can now be determined from the tool results
+4. Update those fields based on the tool results and state model descriptions:
+   - If the tool results contain clear, explicit information about a field, update it
+   - If the information is vague, ambiguous, or doesn't match the field description, leave it as-is
+5. For fields that still cannot be determined, leave them as-is
+6. Return the complete updated state
 
 Respond with ONLY a valid JSON object representing the complete state (all fields from state model):
 {{
@@ -551,7 +546,6 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 							const cleanedResult = AIStateHandler.cleanJsonResponse(postToolStateResult);
 							const updatedState = JSON.parse(cleanedResult);
 
-							// Compare and update state, tracking additional changes
 							for (const key of Object.keys(stateModel)) {
 								if (key in updatedState && JSON.stringify(state[key]) !== JSON.stringify(updatedState[key])) {
 									state[key] = updatedState[key];
@@ -566,19 +560,10 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 						}
 					}
 
-					// ============================================
-					// Save State
-					// ============================================
 					if (stateChangedProps.length > 0) {
-						await stateManagementTool.invoke({
-							operation: "set",
-							content: JSON.stringify(state),
-						});
+						await callStateWorkflow("set", JSON.stringify(state));
 					}
 
-					// ============================================
-					// Return Output
-					// ============================================
 					returnData.push({
 						json: {
 							state: state,
@@ -588,7 +573,7 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 							role: role,
 							message: stateChangedProps.length > 0
 								? `State updated successfully. Changed fields: ${stateChangedProps.join(", ")}`
-								: "No state changes detected"
+								: "No state changes detected",
 						},
 						pairedItem: itemIndex,
 					});
@@ -597,16 +582,18 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 			} catch (error) {
 				if (this.continueOnFail()) {
 					returnData.push({
-						json: { error: error.message },
+						json: {
+							error: (error as Error).message,
+						},
 						error,
 						pairedItem: itemIndex
 					});
 				} else {
-					if (error.context) {
-						error.context.itemIndex = itemIndex;
+					if ((error as any).context) {
+						(error as any).context.itemIndex = itemIndex;
 						throw error;
 					}
-					throw new NodeOperationError(this.getNode(), error, {
+					throw new NodeOperationError(this.getNode(), error as Error, {
 						itemIndex,
 					});
 				}

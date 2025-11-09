@@ -3,6 +3,7 @@ import type {
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
+	IDataObject,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import { RunnableSequence } from '@langchain/core/runnables';
@@ -32,18 +33,34 @@ export class StatefulAIAgent implements INodeType {
 			},
 			{
 				type: NodeConnectionTypes.AiTool,
-				displayName: 'State',
-				required: false,
-				maxConnections: 1,
-			},
-			{
-				type: NodeConnectionTypes.AiTool,
 				displayName: 'Tools',
 				maxConnections: undefined,
 			},
 		],
 		outputs: [NodeConnectionTypes.Main],
 		properties: [
+			{
+				displayName: 'State Management Workflow',
+				name: 'stateWorkflowId',
+				type: 'workflowSelector',
+				default: '',
+				required: true,
+				description: 'Select the workflow that handles state storage. The workflow must have an Execute Workflow Trigger with "operation" (supporting "get" and "set" values) and "content" input fields.',
+			},
+			{
+				displayName: 'This node will send "get" or "set" to the "operation" field and the state content to the "content" field when calling the State Management Workflow. By using this workflow approach, you can track and store state in any way you prefer - whether it\'s in a database, file system, cloud storage, or any other storage solution that fits your needs.',
+				name: 'stateWorkflowInfo',
+				type: 'notice',
+				default: '',
+			},
+			{
+				displayName: 'Session ID',
+				name: 'sessionId',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Unique identifier for the conversation session',
+			},
 			{
 				displayName: 'User Message',
 				name: 'userMessage',
@@ -218,6 +235,27 @@ export class StatefulAIAgent implements INodeType {
 				const conversationHistory = this.getNodeParameter('conversationHistory', itemIndex, false) as boolean;
 				const singlePromptStateTracking = this.getNodeParameter('singlePromptStateTracking', itemIndex, true) as boolean;
 
+				// Get State Management Workflow ID
+				const stateWorkflowIdParam = this.getNodeParameter('stateWorkflowId', itemIndex);
+				const stateWorkflowId = typeof stateWorkflowIdParam === 'object' && stateWorkflowIdParam !== null
+					? (stateWorkflowIdParam as IDataObject).value as string
+					: stateWorkflowIdParam as string;
+
+				// Get session ID
+				const sessionId = this.getNodeParameter('sessionId', itemIndex) as string;
+
+				if (!stateWorkflowId) {
+					throw new NodeOperationError(this.getNode(), 'State Management Workflow is required. Please select a workflow.', {
+						itemIndex,
+					});
+				}
+
+				if (!sessionId) {
+					throw new NodeOperationError(this.getNode(), 'Session ID is required. Please provide a session identifier.', {
+						itemIndex,
+					});
+				}
+
 				// Parse state model
 				let stateModel: Record<string, string> | null = null;
 				if (stateModelStr && stateModelStr.trim()) {
@@ -230,7 +268,7 @@ export class StatefulAIAgent implements INodeType {
 					}
 				}
 
-				// Get AI connections (with maxConnections: 1, this returns a single object, not an array)
+				// Get AI connections
 				const llm = (await this.getInputConnectionData(NodeConnectionTypes.AiLanguageModel, 0)) as any;
 				if (!llm) {
 					throw new NodeOperationError(this.getNode(), 'LLM is required but not connected', {
@@ -238,27 +276,19 @@ export class StatefulAIAgent implements INodeType {
 					});
 				}
 
-				// Get State from first AiTool connection (index 0)
-				let stateManagementTool: any = null;
-				try {
-					const stateConnection = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 0);
-					if (stateConnection) {
-						// If it's an array, take the first element, otherwise use as-is
-						stateManagementTool = Array.isArray(stateConnection) ? stateConnection[0] : stateConnection;
-					}
-				} catch (error) {
-					stateManagementTool = null;
-				}
-
-				// Get tools from second AiTool connection (index 1)
+				// Get Agent Tools
 				let agentTools: any[] = [];
 				try {
-					const toolsConnection = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 1);
-					if (toolsConnection) {
-						agentTools = Array.isArray(toolsConnection) ? toolsConnection : [toolsConnection];
+					const toolsResult = await this.getInputConnectionData(NodeConnectionTypes.AiTool, 0);
+					if (toolsResult) {
+						if (Array.isArray(toolsResult)) {
+							agentTools = toolsResult.filter((tool: any) => tool && typeof tool.invoke === 'function');
+						} else if (typeof (toolsResult as any).invoke === 'function') {
+							agentTools = [toolsResult];
+						}
 					}
 				} catch (error) {
-					agentTools = [];
+					// Tools are optional, continue without them
 				}
 
 
@@ -268,26 +298,37 @@ export class StatefulAIAgent implements INodeType {
 					});
 				}
 
+				const callStateWorkflow = async (operation: string, content: string = '') => {
+					const inputData: IDataObject = {
+						sessionId,
+						operation,
+						content,
+					};
+
+					const result = await this.executeWorkflow(
+						{ id: stateWorkflowId },
+						[{
+							json: inputData
+						}]
+					);
+
+					if (!result?.data?.[0]?.[0]) {
+						throw new NodeOperationError(this.getNode(), 'State Management workflow returned no data', {
+							itemIndex,
+						});
+					}
+
+					return result.data[0][0].json;
+				};
+
 				// Get Previous State
 				let prevState: Record<string, any> = {};
 				let state: Record<string, any> = {};
 				let stateChangedProps: string[] = [];
 
 				if (stateModel || conversationHistory) {
-					if (!stateManagementTool) {
-						throw new NodeOperationError(this.getNode(), 'State connection is required but not connected. Please connect a sub-workflow to the State input.', {
-							itemIndex,
-						});
-					}
-
-					const stateManagementResponse = await stateManagementTool.invoke({
-						operation: "get",
-						content: ""
-					});
-
-					const parsedResponse = JSON.parse(stateManagementResponse);
-					const previousStateData = Array.isArray(parsedResponse) ? parsedResponse[0] : parsedResponse;
-					prevState = previousStateData || {};
+					const stateData = await callStateWorkflow("get");
+					prevState = stateData || {};
 				}
 
 				// Initialize conversation history
@@ -715,11 +756,8 @@ Provide a helpful and natural response.
 				}
 
 				// Save State
-				if (stateManagementTool && stateChangedProps.length > 0) {
-					await stateManagementTool.invoke({
-						operation: "set",
-						content: JSON.stringify(state),
-					});
+				if ((stateModel || conversationHistory) && stateChangedProps.length > 0) {
+					await callStateWorkflow("set", JSON.stringify(state));
 				}
 
 				// Return output

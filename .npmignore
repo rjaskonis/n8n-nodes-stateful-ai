@@ -1,0 +1,53 @@
+# Source files
+nodes/
+*.ts
+tsconfig.json
+tsconfig.tsbuildinfo
+
+# Development files
+.eslintrc*
+eslint.config.mjs
+.prettierrc*
+.prettierignore
+
+# Build artifacts
+dist/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Documentation (README.md will be included automatically)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+test/
+tests/
+*.test.ts
+*.spec.ts
+
+# Examples
+working-*.js
+example/
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Node modules (shouldn't be needed but just in case)
+node_modules/
+

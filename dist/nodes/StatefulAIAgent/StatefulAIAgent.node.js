@@ -29,18 +29,34 @@ class StatefulAIAgent {
                 },
                 {
                     type: n8n_workflow_1.NodeConnectionTypes.AiTool,
-                    displayName: 'State',
-                    required: false,
-                    maxConnections: 1,
-                },
-                {
-                    type: n8n_workflow_1.NodeConnectionTypes.AiTool,
                     displayName: 'Tools',
                     maxConnections: undefined,
                 },
             ],
             outputs: [n8n_workflow_1.NodeConnectionTypes.Main],
             properties: [
+                {
+                    displayName: 'State Management Workflow',
+                    name: 'stateWorkflowId',
+                    type: 'workflowSelector',
+                    default: '',
+                    required: true,
+                    description: 'Select the workflow that handles state storage. The workflow must have an Execute Workflow Trigger with "operation" (supporting "get" and "set" values) and "content" input fields.',
+                },
+                {
+                    displayName: 'This node will send "get" or "set" to the "operation" field and the state content to the "content" field when calling the State Management Workflow. By using this workflow approach, you can track and store state in any way you prefer - whether it\'s in a database, file system, cloud storage, or any other storage solution that fits your needs.',
+                    name: 'stateWorkflowInfo',
+                    type: 'notice',
+                    default: '',
+                },
+                {
+                    displayName: 'Session ID',
+                    name: 'sessionId',
+                    type: 'string',
+                    default: '',
+                    required: true,
+                    description: 'Unique identifier for the conversation session',
+                },
                 {
                     displayName: 'User Message',
                     name: 'userMessage',
@@ -178,6 +194,21 @@ class StatefulAIAgent {
                 const stateModelStr = this.getNodeParameter('stateModel', itemIndex, '');
                 const conversationHistory = this.getNodeParameter('conversationHistory', itemIndex, false);
                 const singlePromptStateTracking = this.getNodeParameter('singlePromptStateTracking', itemIndex, true);
+                const stateWorkflowIdParam = this.getNodeParameter('stateWorkflowId', itemIndex);
+                const stateWorkflowId = typeof stateWorkflowIdParam === 'object' && stateWorkflowIdParam !== null
+                    ? stateWorkflowIdParam.value
+                    : stateWorkflowIdParam;
+                const sessionId = this.getNodeParameter('sessionId', itemIndex);
+                if (!stateWorkflowId) {
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'State Management Workflow is required. Please select a workflow.', {
+                        itemIndex,
+                    });
+                }
+                if (!sessionId) {
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Session ID is required. Please provide a session identifier.', {
+                        itemIndex,
+                    });
+                }
                 let stateModel = null;
                 if (stateModelStr && stateModelStr.trim()) {
                     try {
@@ -195,47 +226,48 @@ class StatefulAIAgent {
                         itemIndex,
                     });
                 }
-                let stateManagementTool = null;
-                try {
-                    const stateConnection = await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiTool, 0);
-                    if (stateConnection) {
-                        stateManagementTool = Array.isArray(stateConnection) ? stateConnection[0] : stateConnection;
-                    }
-                }
-                catch (error) {
-                    stateManagementTool = null;
-                }
                 let agentTools = [];
                 try {
-                    const toolsConnection = await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiTool, 1);
-                    if (toolsConnection) {
-                        agentTools = Array.isArray(toolsConnection) ? toolsConnection : [toolsConnection];
+                    const toolsResult = await this.getInputConnectionData(n8n_workflow_1.NodeConnectionTypes.AiTool, 0);
+                    if (toolsResult) {
+                        if (Array.isArray(toolsResult)) {
+                            agentTools = toolsResult.filter((tool) => tool && typeof tool.invoke === 'function');
+                        }
+                        else if (typeof toolsResult.invoke === 'function') {
+                            agentTools = [toolsResult];
+                        }
                     }
                 }
                 catch (error) {
-                    agentTools = [];
                 }
                 if (!userMessage) {
                     throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'User Message is required', {
                         itemIndex,
                     });
                 }
+                const callStateWorkflow = async (operation, content = '') => {
+                    var _a, _b;
+                    const inputData = {
+                        sessionId,
+                        operation,
+                        content,
+                    };
+                    const result = await this.executeWorkflow({ id: stateWorkflowId }, [{
+                            json: inputData
+                        }]);
+                    if (!((_b = (_a = result === null || result === void 0 ? void 0 : result.data) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b[0])) {
+                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'State Management workflow returned no data', {
+                            itemIndex,
+                        });
+                    }
+                    return result.data[0][0].json;
+                };
                 let prevState = {};
                 let state = {};
                 let stateChangedProps = [];
                 if (stateModel || conversationHistory) {
-                    if (!stateManagementTool) {
-                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'State connection is required but not connected. Please connect a sub-workflow to the State input.', {
-                            itemIndex,
-                        });
-                    }
-                    const stateManagementResponse = await stateManagementTool.invoke({
-                        operation: "get",
-                        content: ""
-                    });
-                    const parsedResponse = JSON.parse(stateManagementResponse);
-                    const previousStateData = Array.isArray(parsedResponse) ? parsedResponse[0] : parsedResponse;
-                    prevState = previousStateData || {};
+                    const stateData = await callStateWorkflow("get");
+                    prevState = stateData || {};
                 }
                 let conversationHistoryValue = null;
                 if (conversationHistory) {
@@ -583,11 +615,8 @@ Provide a helpful and natural response.
                         stateChangedProps.push('conversation_history');
                     }
                 }
-                if (stateManagementTool && stateChangedProps.length > 0) {
-                    await stateManagementTool.invoke({
-                        operation: "set",
-                        content: JSON.stringify(state),
-                    });
+                if ((stateModel || conversationHistory) && stateChangedProps.length > 0) {
+                    await callStateWorkflow("set", JSON.stringify(state));
                 }
                 returnData.push({
                     json: {

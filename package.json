@@ -1,9 +1,9 @@
 {
     "name": "n8n-nodes-stateful-ai",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Advanced AI agent node with state management and tool calling capabilities for n8n",
     "license": "MIT",
-    "homepage": "",
+    "homepage": "https://github.com/rjaskonis/n8n-nodes-stateful-ai#readme",
     "keywords": [
         "n8n-community-node-package"
     ],
@@ -13,7 +13,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/rjaskonis/n8n-nodes-stateful-ai.git"
+        "url": "git+https://github.com/rjaskonis/n8n-nodes-stateful-ai.git"
     },
     "scripts": {
         "build": "n8n-node build",
