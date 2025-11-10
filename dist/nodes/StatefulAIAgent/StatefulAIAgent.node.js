@@ -409,62 +409,44 @@ class StatefulAIAgent {
                 const useAgent = agentTools.length > 0;
                 if (stateModel && singlePromptStateTracking) {
                     const formatExample = useAgent ? `{{
-  "state": {{
-    // Complete state object with all fields from state model
-  }},
+  "state": {{ /* all state model fields */ }},
   "tools_to_invoke": [
-    // Array of tool invocation objects, or empty array if no tools needed
-    // Only request tools if you truly need external data
-    {{
-      "tool_name": "Tool Name",
-      "reason": "Why this tool is needed",
-      "state_field": "field_name",
-      "input_params": {{}}
-    }}
+    {{"tool_name": "Name", "reason": "Why", "state_field": "field", "input_params": {{}}}}
   ]
 }}` : `{{
-  "state": {{
-    // Complete state object with all fields from state model
-  }},
-  "response": "Your helpful and natural response to the user"
+  "state": {{ /* all state model fields */ }},
+  "response": "Your response"
 }}`;
                     const instructionText = useAgent
-                        ? 'If you need external data to populate state fields, specify which tools to invoke. DO NOT generate a response yet - that will be done after tools are executed.'
+                        ? 'Specify tools if external data is needed. Do not generate response yet.'
                         : 'Provide a helpful response';
-                    const humanMessageContent = `State Model (fields to track):
+                    const humanMessageContent = `State Model:
 {stateFields}
 
 Current State:
 {currentState}
 
-${useAgent ? `Available Tools (you can request to use these if needed):
+${useAgent ? `Available Tools:
 {availableTools}
 ` : ''}${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
-Instructions:
-1. Analyze the user message and update state fields based on the state model
-2. For each field in the state model, determine its value from the user message or keep the previous value
-3. {instructionText}
+Tasks:
+1. Update state fields from message or keep previous values
+2. {instructionText}
 
-Respond with ONLY a valid JSON object in the following format:
+Return ONLY valid JSON:
 ${formatExample}`;
                     const systemMessageForFirstCall = useAgent
-                        ? `You are analyzing a user message to update the conversation state and determine which tools should be invoked.
+                        ? `Analyze user message to update state and identify required tools.
 
-Instructions:
-1. Analyze the user message and determine the new state values based on the state model
-2. For each field in the state model, determine its current value based on the user message and previous state
-3. If a value hasn't changed or can't be determined from the message, keep the previous value
-4. Identify which tools should be invoked to populate any state fields that require external data
-5. For each tool that should be invoked, specify:
-   - tool_name: the exact name of the tool
-   - reason: why this tool should be invoked
-   - state_field: which state field will be populated by this tool's result
-   - input_params: the parameters to pass to the tool (as a JSON object)
+Rules:
+- Update state fields from message or keep previous values
+- Identify tools needed for missing state data
+- For each tool: tool_name, reason, state_field, input_params
 
-Respond with ONLY a valid JSON object in the following format:
+Return ONLY valid JSON:
 ${formatExample}`
                         : '{systemPrompt}';
                     const combinedPrompt = prompts_1.ChatPromptTemplate.fromMessages([
@@ -523,39 +505,36 @@ Result: ${JSON.stringify(result.result || result.error, null, 2)}`).join('\n\n')
                                 .map(field => `- ${field.path}: ${field.description}`)
                                 .join('\n');
                             const stateModelStructureJson = JSON.stringify(stateModel, null, 2);
-                            const postToolHumanMessageContent = `State Model Structure (EXACT structure to follow):
+                            const postToolHumanMessageContent = `State Model Structure:
 {stateModelStructure}
 
-State Model Fields (all fields that must exist):
+State Fields:
 {stateFields}
 
-Current State (after initial tool invocations):
+Current State:
 {currentState}
 
-Tool Invocation Results:
+Tool Results:
 {toolResults}
 
 ${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
-The following tools were invoked to gather information:
+Tools Invoked:
 {toolsInvoked}
 
-CRITICAL INSTRUCTIONS:
-1. Analyze the tool results and update the state to EXACTLY match the state model structure
-2. DO NOT add any fields that are not in the state model
-3. DO NOT change field names - use the EXACT field names from the state model (e.g., if state model has "email_address", use "email_address", NOT "emailAddress" or "recipientEmail")
-4. Extract values from tool results and map them to the CORRECT state model fields
-5. For nested structures, preserve the EXACT nesting structure from the state model
-6. Provide a natural, helpful response to the user based on the updated state and tool results
+Rules:
+- Update state to EXACTLY match state model structure
+- Use EXACT field names from state model (e.g., "email_address" not "emailAddress")
+- Map tool results to correct state fields
+- Preserve nested structure
+- Provide natural response
 
-Respond with ONLY a valid JSON object in the following format:
+Return ONLY valid JSON:
 {{
-  "state": {{
-    // Complete state object that EXACTLY matches the state model structure
-  }},
-  "response": "Your natural response to the user"
+  "state": {{ /* exact state model structure */ }},
+  "response": "Your response"
 }}`;
                             const postToolCombinedPrompt = prompts_1.ChatPromptTemplate.fromMessages([
                                 ['system', '{systemPrompt}'],
@@ -637,49 +616,33 @@ Provide a helpful and natural response.`;
                 }
                 else if (stateModel && !singlePromptStateTracking) {
                     const stateAnalysisFormatExample = useAgent ? `{{
-  "state": {{
-    // Complete state object with all fields from state model
-  }},
+  "state": {{ /* all state model fields */ }},
   "tools_to_invoke": [
-    // Array of tool invocation objects, or empty array if no tools needed
-    {{
-      "tool_name": "Tool Name",
-      "reason": "Reason for invocation",
-      "state_field": "field_name",
-      "input_params": {{}}
-    }}
+    {{"tool_name": "Name", "reason": "Why", "state_field": "field", "input_params": {{}}}}
   ]
 }}` : `{{
-  "state": {{
-    // Complete state object with all fields from state model
-  }}
+  "state": {{ /* all state model fields */ }}
 }}`;
-                    const stateAnalysisSystemMessage = `You are analyzing a user message to update the conversation state and determine which tools should be invoked.
+                    const stateAnalysisSystemMessage = `Analyze user message to update state${useAgent ? ' and identify required tools' : ''}.
 
-Instructions:
-1. Analyze the user message and determine the new state values based on the state model
-2. For each field in the state model, determine its current value based on the user message and previous state
-3. If a value hasn't changed or can't be determined from the message, keep the previous value
-${useAgent ? `4. Identify which tools should be invoked to populate any state fields that require external data
-5. For each tool that should be invoked, specify:
-   - tool_name: the exact name of the tool
-   - reason: why this tool should be invoked
-   - state_field: which state field will be populated by this tool's result
-   - input_params: the parameters to pass to the tool (as a JSON object)` : ''}
+Rules:
+- Update state fields from message or keep previous values
+${useAgent ? `- Identify tools needed for missing state data
+- For each tool: tool_name, reason, state_field, input_params` : ''}
 
-Respond with ONLY a valid JSON object in the following format:
+Return ONLY valid JSON:
 ${stateAnalysisFormatExample}`;
-                    const stateAnalysisHumanMessage = `State Model (fields to track):
+                    const stateAnalysisHumanMessage = `State Model:
 {stateFields}
 
 Current State:
 {currentState}
 
-${useAgent ? `Available Tools (name and description):
+${useAgent ? `Available Tools:
 {availableTools}
 ` : ''}${conversationHistory ? `Previous Conversation:
 {conversation_history}
-` : ''}User Message: {userMessage}`;
+` : ''}User: {userMessage}`;
                     const stateAnalysisPrompt = prompts_1.ChatPromptTemplate.fromMessages([
                         ['system', stateAnalysisSystemMessage],
                         ['human', stateAnalysisHumanMessage],
@@ -728,33 +691,31 @@ Result: ${JSON.stringify(result.result || result.error, null, 2)}`).join('\n\n')
                                 .join('\n');
                             const stateModelStructureJson = JSON.stringify(stateModel, null, 2);
                             const postToolStateFormatExample = stateModelStructureJson.replace(/\{/g, '{{').replace(/\}/g, '}}');
-                            const postToolStateSystemMessage = `You are analyzing tool results to properly update the state based on the EXACT state model structure.
+                            const postToolStateSystemMessage = `Update state from tool results to EXACTLY match state model structure.
 
-CRITICAL INSTRUCTIONS:
-1. You MUST return a state object that EXACTLY matches the state model structure shown above
-2. DO NOT add any fields that are not in the state model
-3. DO NOT change field names - use the EXACT field names from the state model (e.g., if state model has "email_address", use "email_address", NOT "emailAddress" or "recipientEmail")
-4. Extract values from tool results and map them to the CORRECT state model fields
-5. For nested structures, preserve the EXACT nesting structure from the state model
-6. If a tool result has a field like "emailAddress", map it to "email_address" if that's what the state model expects
-7. Only include fields that exist in the state model structure
+Rules:
+- Return state object matching EXACT state model structure
+- Use EXACT field names (e.g., "email_address" not "emailAddress")
+- Map tool results to correct state fields
+- Preserve nested structure
+- Only include fields in state model
 
-Respond with ONLY a valid JSON object that EXACTLY matches the state model structure shown in the human message.`;
-                            const postToolStateHumanMessage = `State Model Structure (EXACT structure to follow):
+Return ONLY valid JSON matching state model structure.`;
+                            const postToolStateHumanMessage = `State Model Structure:
 {stateModelStructure}
 
-State Model Fields (all fields that must exist):
+State Fields:
 {stateFields}
 
-Current State (after initial tool invocations):
+Current State:
 {currentState}
 
-Tool Invocation Results:
+Tool Results:
 {toolResults}
 
-User Message (for context): {userMessage}
+User: {userMessage}
 
-Format Example (EXACT structure to match):
+Format:
 ${postToolStateFormatExample}`;
                             const postToolStatePrompt = prompts_1.ChatPromptTemplate.fromMessages([
                                 ['system', postToolStateSystemMessage],
@@ -799,7 +760,7 @@ ${postToolStateFormatExample}`;
 {conversation_history}
 ` : ''}User: {user_message}
 
-Provide a helpful and natural response.`;
+Respond naturally.`;
                             const responsePrompt = prompts_1.ChatPromptTemplate.fromMessages([
                                 ['system', processedSystemPrompt],
                                 ['human', responseHumanMessageContent],
@@ -828,7 +789,7 @@ Provide a helpful and natural response.`;
 {conversation_history}
 ` : ''}User: {user_message}
 
-Provide a helpful and natural response.`;
+Respond naturally.`;
                             const responsePrompt = prompts_1.ChatPromptTemplate.fromMessages([
                                 ['system', processedSystemPrompt],
                                 ['human', responseHumanMessageContent],
@@ -895,12 +856,11 @@ Provide a helpful and natural response.`;
                     if (useAgent) {
                         const agentHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
-` : ''}You have access to various tools that can help you answer questions and perform tasks.
-Use the appropriate tools when needed to provide accurate and helpful responses.
+` : ''}You have access to tools. Use them when needed.
 
 User: {user_message}
 
-Think step-by-step and use tools when they would be helpful.
+Think step-by-step and use tools when helpful.
 
 {agent_scratchpad}`;
                         const agentPrompt = prompts_1.ChatPromptTemplate.fromMessages([
@@ -933,7 +893,7 @@ Think step-by-step and use tools when they would be helpful.
 {conversation_history}
 ` : ''}User: {user_message}
 
-Provide a helpful and natural response.`;
+Respond naturally.`;
                         const simplePrompt = prompts_1.ChatPromptTemplate.fromMessages([
                             ['system', '{systemPrompt}'],
                             ['human', simpleHumanMessageContent],

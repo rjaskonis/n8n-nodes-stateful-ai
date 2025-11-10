@@ -236,9 +236,9 @@ export class AIStateHandler implements INodeType {
 
 				if (role !== 'user') {
 					const systemStatePrompt = PromptTemplate.fromTemplate(`
-You are updating the conversation state based on a system message.
+Update conversation state from system message.
 
-State Model (fields to track):
+State Model:
 {stateFields}
 
 Current State:
@@ -246,24 +246,16 @@ Current State:
 
 System Message: {systemMessage}
 
-Instructions:
-1. Analyze the system message CAREFULLY and update the state values based on the state model
-2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the message. Do NOT make assumptions or infer values from ambiguous content.
-3. IMPORTANT extraction rules:
-   - For name fields: Only extract if the message explicitly contains a name (e.g., "User's name is John", "Set name to Maria"). Do NOT extract names from greetings, casual expressions, or ambiguous content.
-   - For other fields: Only extract if the message contains clear, unambiguous information related to that field's description. If the message is vague, ambiguous, or doesn't contain relevant information, keep the previous value or set to null.
-   - Consider context: Be aware that words in different languages may have different meanings. A greeting in one language should not be mistaken for a name or other field value.
-   - Language awareness: Be aware that words in different languages may have different meanings. Only extract values when there is clear, explicit information.
-4. For each field in the state model, determine its current value based on the system message and previous state:
-   - If the message contains clear, explicit information about the field, update it
-   - If the value hasn't changed or can't be determined from the message, keep the previous value (or null if no previous value exists)
-5. Return the complete updated state
+Rules:
+- Only update fields with EXPLICIT evidence. No assumptions.
+- Names: Extract only from explicit introductions (e.g., "name is John"). Ignore greetings.
+- Other fields: Extract only clear, unambiguous info. Keep previous value if unclear.
+- Preserve previous values when message lacks relevant info.
 
-Respond with ONLY a valid JSON object representing the complete state (all fields from state model):
+Return ONLY valid JSON with all state model fields:
 {{
   "field1": "value1",
-  "field2": "value2",
-  ...
+  "field2": "value2"
 }}
 `);
 
@@ -330,62 +322,33 @@ Respond with ONLY a valid JSON object representing the complete state (all field
 					).join("\n");
 
 					const stateAndToolsPrompt = PromptTemplate.fromTemplate(`
-You are analyzing a user message to update the conversation state and determine which tools should be invoked to populate missing information.
+Analyze user message to update state and identify required tools.
 
-State Model (fields to track):
+State Model:
 {stateFields}
 
 Current State:
 {currentState}
 
-Available Tools (name and description):
+Available Tools:
 {availableTools}
 
 User Message: {userMessage}
 
-Instructions:
-1. Analyze the user message CAREFULLY and determine the new state values based on the state model
-2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the message. Do NOT make assumptions or infer values from ambiguous content.
-3. IMPORTANT extraction rules:
-   - For name fields: Only extract if the user explicitly introduces themselves (e.g., "My name is John", "I'm Maria", "Call me Sarah"). Do NOT extract names from greetings (e.g., "Ola", "Hello", "Hi"), casual expressions, or single words that might be names but are actually greetings or other words in different languages.
-   - For other fields: Only extract if the message contains clear, unambiguous information related to that field's description. If the message is vague, ambiguous, or doesn't contain relevant information, keep the previous value or set to null.
-   - Consider context: A single word like "Ola" is a greeting in Portuguese, not a name. Only extract names when the user explicitly states their name or introduces themselves.
-   - Language awareness: Be aware that words in different languages may have different meanings. A greeting in one language should not be mistaken for a name.
-4. For each field in the state model, determine its current value based on the user message and previous state:
-   - If the message contains clear, explicit information about the field, update it
-   - If the value hasn't changed or can't be determined from the message, keep the previous value (or null if no previous value exists)
-5. Identify which tools should be invoked to populate any state fields that require external data
-6. For each tool that should be invoked, specify:
-   - tool_name: the exact name of the tool
-   - reason: why this tool should be invoked
-   - state_field: which state field will be populated by this tool's result
-   - input_params: the parameters to pass to the tool (as a JSON object)
-7. IMPORTANT: Identify state fields that depend on tool results or other state fields and cannot be fully determined until after tools are invoked.
-   For example:
-   - A field that should be "the first element" of an array populated by a tool
-   - A field that depends on processing tool results
-   - A field that references other state fields that will be updated by tools
-   List these fields in "fields_needing_post_analysis"
+Rules:
+- Update fields only with EXPLICIT evidence. No assumptions.
+- Names: Extract only from explicit introductions ("My name is X", "I'm Y"). Ignore greetings.
+- Other fields: Extract only clear info. Keep previous value if unclear.
+- Identify tools needed for missing state data.
+- List fields requiring post-tool analysis in "fields_needing_post_analysis".
 
-Respond with ONLY a valid JSON object in the following format:
+Return ONLY valid JSON:
 {{
-  "state": {{
-    // Complete state object with all fields from state model
-  }},
+  "state": {{ /* all state model fields */ }},
   "tools_to_invoke": [
-    // Array of tool invocation objects, or empty array if no tools needed
-    {{
-      "tool_name": "Tool Name",
-      "reason": "Reason for invocation",
-      "state_field": "field_name",
-      "input_params": {{}}
-    }}
+    {{"tool_name": "Name", "reason": "Why", "state_field": "field", "input_params": {{}}}}
   ],
-  "fields_needing_post_analysis": [
-    // Array of state field names that need re-analysis after tools run, or empty array
-    "field_name_1",
-    "field_name_2"
-  ]
+  "fields_needing_post_analysis": ["field1", "field2"]
 }}
 `);
 
@@ -498,34 +461,28 @@ Result: ${JSON.stringify(result.result || result.error, null, 2)}`
 						).join('\n\n');
 
 						const postToolStatePrompt = PromptTemplate.fromTemplate(`
-You are analyzing tool results to update any remaining state fields that can now be determined.
+Update state from tool results.
 
-State Model (fields to track):
+State Model:
 {stateFields}
 
-Current State (after initial analysis and tool invocations):
+Current State:
 {currentState}
 
-Tool Invocation Results:
+Tool Results:
 {toolResults}
 
-User Message (for context): {userMessage}
+User Message: {userMessage}
 
-Instructions:
-1. Review the current state and tool results CAREFULLY
-2. CRITICAL: Only update state fields when there is CLEAR and EXPLICIT evidence in the tool results. Do NOT make assumptions or infer values from ambiguous content.
-3. Identify any state fields that are currently null/unset but can now be determined from the tool results
-4. Update those fields based on the tool results and state model descriptions:
-   - If the tool results contain clear, explicit information about a field, update it
-   - If the information is vague, ambiguous, or doesn't match the field description, leave it as-is
-5. For fields that still cannot be determined, leave them as-is
-6. Return the complete updated state
+Rules:
+- Update only fields with EXPLICIT evidence from tool results. No assumptions.
+- Update null/unset fields if tool results provide clear info matching field description.
+- Keep fields unchanged if info is vague or doesn't match.
 
-Respond with ONLY a valid JSON object representing the complete state (all fields from state model):
+Return ONLY valid JSON with all state model fields:
 {{
   "field1": "value1",
-  "field2": "value2",
-  ...
+  "field2": "value2"
 }}
 `);
 
