@@ -414,8 +414,25 @@ Instructions:
 
 Respond with ONLY a valid JSON object in the following format:
 ${formatExample}`;
+                    const systemMessageForFirstCall = useAgent
+                        ? `You are analyzing a user message to update the conversation state and determine which tools should be invoked.
+
+Instructions:
+1. Analyze the user message and determine the new state values based on the state model
+2. For each field in the state model, determine its current value based on the user message and previous state
+3. If a value hasn't changed or can't be determined from the message, keep the previous value
+4. Identify which tools should be invoked to populate any state fields that require external data
+5. For each tool that should be invoked, specify:
+   - tool_name: the exact name of the tool
+   - reason: why this tool should be invoked
+   - state_field: which state field will be populated by this tool's result
+   - input_params: the parameters to pass to the tool (as a JSON object)
+
+Respond with ONLY a valid JSON object in the following format:
+${formatExample}`
+                        : '{systemPrompt}';
                     const combinedPrompt = prompts_1.ChatPromptTemplate.fromMessages([
-                        ['system', '{systemPrompt}'],
+                        ['system', systemMessageForFirstCall],
                         ['human', humanMessageContent],
                     ]);
                     const combinedChain = runnables_1.RunnableSequence.from([
@@ -425,13 +442,15 @@ ${formatExample}`;
                     ]);
                     const stateFieldsForTemplate = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, prevStateModelOnly);
                     const inputVariables = {
-                        systemPrompt: systemPrompt,
                         user_message: userMessage,
                         stateFields: stateFieldDescriptions,
                         currentState: Object.keys(prevStateModelOnly).length > 0 ? JSON.stringify(prevStateModelOnly, null, 2) : "{}",
                         instructionText: instructionText,
                         ...stateFieldsForTemplate
                     };
+                    if (!useAgent) {
+                        inputVariables.systemPrompt = systemPrompt;
+                    }
                     if (useAgent) {
                         inputVariables.availableTools = availableToolsDesc;
                     }
