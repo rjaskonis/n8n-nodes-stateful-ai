@@ -175,6 +175,42 @@ class StatefulAIAgent {
         }
         current[parts[parts.length - 1]] = value;
     }
+    static parseTemplateWithNestedProps(template, input) {
+        const variablePattern = /\{([^}]+)\}/g;
+        let result = template;
+        let match;
+        const processedVars = new Set();
+        const variables = [];
+        while ((match = variablePattern.exec(template)) !== null) {
+            const varName = match[1];
+            if (!processedVars.has(varName)) {
+                variables.push(varName);
+                processedVars.add(varName);
+            }
+        }
+        for (const varName of variables) {
+            let value;
+            if (varName.includes('.')) {
+                value = StatefulAIAgent.getNestedValue(input, varName);
+            }
+            else {
+                value = input[varName];
+            }
+            if (value === undefined || value === null) {
+                value = '';
+            }
+            else if (typeof value === 'object') {
+                value = JSON.stringify(value);
+                value = value.replace(/\{/g, '{{').replace(/\}/g, '}}');
+            }
+            else {
+                value = String(value);
+            }
+            const regex = new RegExp(`\\{${varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g');
+            result = result.replace(regex, value);
+        }
+        return result;
+    }
     static mergeStateWithModel(updatedState, stateModel, currentState) {
         const mergedState = {};
         const initializeStructure = (model, target) => {
@@ -754,13 +790,18 @@ ${postToolStateFormatExample}`;
                             catch (error) {
                             }
                             const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
+                            const templateInput = {
+                                ...state,
+                                ...stateFieldsForPrompt
+                            };
+                            const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
                             const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
 Provide a helpful and natural response.`;
                             const responsePrompt = prompts_1.ChatPromptTemplate.fromMessages([
-                                ['system', '{systemPrompt}'],
+                                ['system', processedSystemPrompt],
                                 ['human', responseHumanMessageContent],
                             ]);
                             const responseChain = runnables_1.RunnableSequence.from([
@@ -769,9 +810,7 @@ Provide a helpful and natural response.`;
                                 new output_parsers_1.StringOutputParser(),
                             ]);
                             const responseInput = {
-                                systemPrompt: systemPrompt,
                                 user_message: userMessage,
-                                ...stateFieldsForPrompt
                             };
                             if (conversationHistory && conversationHistoryValue) {
                                 responseInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
@@ -780,13 +819,18 @@ Provide a helpful and natural response.`;
                         }
                         else {
                             const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
+                            const templateInput = {
+                                ...state,
+                                ...stateFieldsForPrompt
+                            };
+                            const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
                             const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
 Provide a helpful and natural response.`;
                             const responsePrompt = prompts_1.ChatPromptTemplate.fromMessages([
-                                ['system', '{systemPrompt}'],
+                                ['system', processedSystemPrompt],
                                 ['human', responseHumanMessageContent],
                             ]);
                             const responseChain = runnables_1.RunnableSequence.from([
@@ -795,9 +839,7 @@ Provide a helpful and natural response.`;
                                 new output_parsers_1.StringOutputParser(),
                             ]);
                             const responseInput = {
-                                systemPrompt: systemPrompt,
                                 user_message: userMessage,
-                                ...stateFieldsForPrompt
                             };
                             if (conversationHistory && conversationHistoryValue) {
                                 responseInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);
@@ -807,13 +849,18 @@ Provide a helpful and natural response.`;
                     }
                     else {
                         const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
+                        const templateInput = {
+                            ...state,
+                            ...stateFieldsForPrompt
+                        };
+                        const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
                         const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
 Provide a helpful and natural response.`;
                         const responsePrompt = prompts_1.ChatPromptTemplate.fromMessages([
-                            ['system', '{systemPrompt}'],
+                            ['system', processedSystemPrompt],
                             ['human', responseHumanMessageContent],
                         ]);
                         const responseChain = runnables_1.RunnableSequence.from([
@@ -822,9 +869,7 @@ Provide a helpful and natural response.`;
                             new output_parsers_1.StringOutputParser(),
                         ]);
                         const responseInput = {
-                            systemPrompt: systemPrompt,
                             user_message: userMessage,
-                            ...stateFieldsForPrompt
                         };
                         if (conversationHistory && conversationHistoryValue) {
                             responseInput.conversation_history = StatefulAIAgent.formatConversationHistory(conversationHistoryValue);

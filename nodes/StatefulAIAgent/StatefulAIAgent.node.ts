@@ -190,6 +190,60 @@ export class StatefulAIAgent implements INodeType {
 		current[parts[parts.length - 1]] = value;
 	}
 
+	static parseTemplateWithNestedProps(template: string, input: Record<string, any>): string {
+		// Find all {variable} patterns in the template
+		const variablePattern = /\{([^}]+)\}/g;
+		let result = template;
+		let match;
+
+		// Create a Set to track processed variables to avoid duplicate processing
+		const processedVars = new Set<string>();
+
+		// First pass: collect all variables
+		const variables: string[] = [];
+		while ((match = variablePattern.exec(template)) !== null) {
+			const varName = match[1];
+			if (!processedVars.has(varName)) {
+				variables.push(varName);
+				processedVars.add(varName);
+			}
+		}
+
+		// Second pass: replace each variable
+		for (const varName of variables) {
+			let value: any;
+
+			// Check if it's a nested property (contains dots)
+			if (varName.includes('.')) {
+				// Use getNestedValue to resolve nested properties
+				value = StatefulAIAgent.getNestedValue(input, varName);
+			} else {
+				// Direct property access
+				value = input[varName];
+			}
+
+			// Handle undefined/null values
+			if (value === undefined || value === null) {
+				value = '';
+			} else if (typeof value === 'object') {
+				// Stringify objects and arrays
+				value = JSON.stringify(value);
+				// Escape curly braces for LangChain's ChatPromptTemplate (double them)
+				// This prevents LangChain from trying to parse them as template variables
+				value = value.replace(/\{/g, '{{').replace(/\}/g, '}}');
+			} else {
+				// Convert to string for primitive values
+				value = String(value);
+			}
+
+			// Replace all occurrences of this variable in the template
+			const regex = new RegExp(`\\{${varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g');
+			result = result.replace(regex, value);
+		}
+
+		return result;
+	}
+
 	static mergeStateWithModel(updatedState: any, stateModel: any, currentState: Record<string, any>): Record<string, any> {
 		// Start with a clean state that matches the state model structure exactly
 		const mergedState: Record<string, any> = {};
@@ -953,6 +1007,15 @@ ${postToolStateFormatExample}`;
 							// Call 2: Generate response based on updated state
 							const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
 
+							// Prepare input object for template parsing (includes state fields and full state for nested access)
+							const templateInput: Record<string, any> = {
+								...state,
+								...stateFieldsForPrompt
+							};
+
+							// Parse systemPrompt with nested properties and object stringification
+							const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
+
 							const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
@@ -960,7 +1023,7 @@ ${postToolStateFormatExample}`;
 Provide a helpful and natural response.`;
 
 							const responsePrompt = ChatPromptTemplate.fromMessages([
-								['system', '{systemPrompt}'],
+								['system', processedSystemPrompt],
 								['human', responseHumanMessageContent],
 							]);
 
@@ -971,9 +1034,7 @@ Provide a helpful and natural response.`;
 							]) as any;
 
 							const responseInput: Record<string, any> = {
-								systemPrompt: systemPrompt,
 								user_message: userMessage,
-								...stateFieldsForPrompt
 							};
 
 							if (conversationHistory && conversationHistoryValue) {
@@ -985,6 +1046,15 @@ Provide a helpful and natural response.`;
 							// Generate response using system_prompt with state variables
 							const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
 
+							// Prepare input object for template parsing (includes state fields and full state for nested access)
+							const templateInput: Record<string, any> = {
+								...state,
+								...stateFieldsForPrompt
+							};
+
+							// Parse systemPrompt with nested properties and object stringification
+							const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
+
 							const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
@@ -992,7 +1062,7 @@ Provide a helpful and natural response.`;
 Provide a helpful and natural response.`;
 
 							const responsePrompt = ChatPromptTemplate.fromMessages([
-								['system', '{systemPrompt}'],
+								['system', processedSystemPrompt],
 								['human', responseHumanMessageContent],
 							]);
 
@@ -1003,9 +1073,7 @@ Provide a helpful and natural response.`;
 							]) as any;
 
 							const responseInput: Record<string, any> = {
-								systemPrompt: systemPrompt,
 								user_message: userMessage,
-								...stateFieldsForPrompt
 							};
 
 							if (conversationHistory && conversationHistoryValue) {
@@ -1019,6 +1087,15 @@ Provide a helpful and natural response.`;
 						// Generate response using system_prompt with state variables
 						const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
 
+						// Prepare input object for template parsing (includes state fields and full state for nested access)
+						const templateInput: Record<string, any> = {
+							...state,
+							...stateFieldsForPrompt
+						};
+
+						// Parse systemPrompt with nested properties and object stringification
+						const processedSystemPrompt = StatefulAIAgent.parseTemplateWithNestedProps(systemPrompt, templateInput);
+
 						const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
@@ -1026,7 +1103,7 @@ Provide a helpful and natural response.`;
 Provide a helpful and natural response.`;
 
 						const responsePrompt = ChatPromptTemplate.fromMessages([
-							['system', '{systemPrompt}'],
+							['system', processedSystemPrompt],
 							['human', responseHumanMessageContent],
 						]);
 
@@ -1037,9 +1114,7 @@ Provide a helpful and natural response.`;
 						]) as any;
 
 						const responseInput: Record<string, any> = {
-							systemPrompt: systemPrompt,
 							user_message: userMessage,
-							...stateFieldsForPrompt
 						};
 
 						if (conversationHistory && conversationHistoryValue) {

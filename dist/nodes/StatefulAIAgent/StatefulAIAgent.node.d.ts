@@ -14,6 +14,7 @@ export declare class StatefulAIAgent implements INodeType {
     }>;
     static getNestedValue(obj: any, path: string): any;
     static setNestedValue(obj: any, path: string, value: any): void;
+    static parseTemplateWithNestedProps(template: string, input: Record<string, any>): string;
     static mergeStateWithModel(updatedState: any, stateModel: any, currentState: Record<string, any>): Record<string, any>;
     static invokeTools(toolsToInvoke: any[], agentTools: any[], stateModel: Record<string, string>, state: Record<string, any>, stateChangedProps: string[]): Promise<{
         invokedToolNames: string[];
