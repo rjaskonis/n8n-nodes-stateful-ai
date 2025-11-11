@@ -122,12 +122,22 @@ class AIStateHandler {
         for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
             try {
                 const message = this.getNodeParameter('message', itemIndex);
-                const stateModelStr = this.getNodeParameter('stateModel', itemIndex);
+                const stateModelParam = this.getNodeParameter('stateModel', itemIndex);
                 const role = this.getNodeParameter('role', itemIndex, 'user');
                 if (!message) {
                     throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'message is required but was not provided', {
                         itemIndex,
                     });
+                }
+                let stateModelStr;
+                if (typeof stateModelParam === 'object' && stateModelParam !== null) {
+                    stateModelStr = JSON.stringify(stateModelParam);
+                }
+                else if (typeof stateModelParam === 'string') {
+                    stateModelStr = stateModelParam;
+                }
+                else {
+                    stateModelStr = '';
                 }
                 if (!stateModelStr || !stateModelStr.trim()) {
                     throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'state_model is required but was not provided', {

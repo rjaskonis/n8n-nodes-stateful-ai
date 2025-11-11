@@ -380,7 +380,7 @@ export class StatefulAIAgent implements INodeType {
 				// Get node parameters
 				const userMessage = this.getNodeParameter('userMessage', itemIndex) as string;
 				const systemPrompt = this.getNodeParameter('systemPrompt', itemIndex, "You're a helpful assistant") as string;
-				const stateModelStr = this.getNodeParameter('stateModel', itemIndex, '') as string;
+				const stateModelParam = this.getNodeParameter('stateModel', itemIndex, '');
 				const conversationHistory = this.getNodeParameter('conversationHistory', itemIndex, false) as boolean;
 				const singlePromptStateTracking = this.getNodeParameter('singlePromptStateTracking', itemIndex, true) as boolean;
 
@@ -403,6 +403,18 @@ export class StatefulAIAgent implements INodeType {
 					throw new NodeOperationError(this.getNode(), 'Session ID is required. Please provide a session identifier.', {
 						itemIndex,
 					});
+				}
+
+				// Handle stateModel - it can be a string or an object from another node
+				let stateModelStr: string;
+				if (typeof stateModelParam === 'object' && stateModelParam !== null) {
+					// If it's an object, stringify it
+					stateModelStr = JSON.stringify(stateModelParam);
+				} else if (typeof stateModelParam === 'string') {
+					// If it's already a string, use it as-is
+					stateModelStr = stateModelParam;
+				} else {
+					stateModelStr = '';
 				}
 
 				// Parse state model

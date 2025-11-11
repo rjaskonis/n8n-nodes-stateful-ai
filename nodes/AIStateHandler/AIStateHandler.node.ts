@@ -129,13 +129,25 @@ export class AIStateHandler implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const message = this.getNodeParameter('message', itemIndex) as string;
-				const stateModelStr = this.getNodeParameter('stateModel', itemIndex) as string;
+				const stateModelParam = this.getNodeParameter('stateModel', itemIndex);
 				const role = this.getNodeParameter('role', itemIndex, 'user') as string;
 
 				if (!message) {
 					throw new NodeOperationError(this.getNode(), 'message is required but was not provided', {
 						itemIndex,
 					});
+				}
+
+				// Handle stateModel - it can be a string or an object from another node
+				let stateModelStr: string;
+				if (typeof stateModelParam === 'object' && stateModelParam !== null) {
+					// If it's an object, stringify it
+					stateModelStr = JSON.stringify(stateModelParam);
+				} else if (typeof stateModelParam === 'string') {
+					// If it's already a string, use it as-is
+					stateModelStr = stateModelParam;
+				} else {
+					stateModelStr = '';
 				}
 
 				if (!stateModelStr || !stateModelStr.trim()) {

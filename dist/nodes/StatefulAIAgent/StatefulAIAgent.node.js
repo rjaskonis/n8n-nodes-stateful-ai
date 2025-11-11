@@ -306,7 +306,7 @@ class StatefulAIAgent {
             try {
                 const userMessage = this.getNodeParameter('userMessage', itemIndex);
                 const systemPrompt = this.getNodeParameter('systemPrompt', itemIndex, "You're a helpful assistant");
-                const stateModelStr = this.getNodeParameter('stateModel', itemIndex, '');
+                const stateModelParam = this.getNodeParameter('stateModel', itemIndex, '');
                 const conversationHistory = this.getNodeParameter('conversationHistory', itemIndex, false);
                 const singlePromptStateTracking = this.getNodeParameter('singlePromptStateTracking', itemIndex, true);
                 const stateWorkflowIdParam = this.getNodeParameter('stateWorkflowId', itemIndex);
@@ -323,6 +323,16 @@ class StatefulAIAgent {
                     throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Session ID is required. Please provide a session identifier.', {
                         itemIndex,
                     });
+                }
+                let stateModelStr;
+                if (typeof stateModelParam === 'object' && stateModelParam !== null) {
+                    stateModelStr = JSON.stringify(stateModelParam);
+                }
+                else if (typeof stateModelParam === 'string') {
+                    stateModelStr = stateModelParam;
+                }
+                else {
+                    stateModelStr = '';
                 }
                 let stateModel = null;
                 if (stateModelStr && stateModelStr.trim()) {
