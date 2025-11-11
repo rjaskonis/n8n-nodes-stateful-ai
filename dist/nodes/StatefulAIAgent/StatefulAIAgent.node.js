@@ -589,7 +589,17 @@ Return ONLY valid JSON:
                     }
                     else if (useAgent && toolsToInvoke.length === 0) {
                         const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
-                        const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
+                        const modelFields = StatefulAIAgent.extractStateModelStructure(stateModel);
+                        const stateModelStructureDesc = modelFields
+                            .map(field => `- ${field.path}: ${field.description}`)
+                            .join('\n');
+                        const responseHumanMessageContent = `State Model:
+{stateFields}
+
+Current State:
+{currentState}
+
+${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
@@ -606,6 +616,8 @@ Provide a helpful and natural response.`;
                         const responseInput = {
                             systemPrompt: systemPrompt,
                             user_message: userMessage,
+                            stateFields: stateModelStructureDesc,
+                            currentState: JSON.stringify(state, null, 2),
                             ...stateFieldsForPrompt
                         };
                         if (conversationHistory && conversationHistoryValue) {

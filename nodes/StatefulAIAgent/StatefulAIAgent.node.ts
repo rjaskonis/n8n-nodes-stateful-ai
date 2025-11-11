@@ -753,7 +753,19 @@ Return ONLY valid JSON:
 						// Tools are attached but no tools were requested - generate response now
 						const stateFieldsForPrompt = StatefulAIAgent.prepareStateFieldsForTemplate(stateModel, state);
 
-						const responseHumanMessageContent = `${conversationHistory ? `Previous Conversation:
+						// Extract state model structure (including nested fields)
+						const modelFields = StatefulAIAgent.extractStateModelStructure(stateModel);
+						const stateModelStructureDesc = modelFields
+							.map(field => `- ${field.path}: ${field.description}`)
+							.join('\n');
+
+						const responseHumanMessageContent = `State Model:
+{stateFields}
+
+Current State:
+{currentState}
+
+${conversationHistory ? `Previous Conversation:
 {conversation_history}
 ` : ''}User: {user_message}
 
@@ -773,6 +785,8 @@ Provide a helpful and natural response.`;
 						const responseInput: Record<string, any> = {
 							systemPrompt: systemPrompt,
 							user_message: userMessage,
+							stateFields: stateModelStructureDesc,
+							currentState: JSON.stringify(state, null, 2),
 							...stateFieldsForPrompt
 						};
 
