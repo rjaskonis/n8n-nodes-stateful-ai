@@ -433,7 +433,7 @@ ${useAgent ? `Available Tools:
 ` : ''}User: {user_message}
 
 Tasks:
-1. Update state fields from message or keep previous values
+1. Extract information from the user message to fill missing or null state fields. If the user is providing information in response to a question, map it to the appropriate state field.
 2. {instructionText}
 
 Return ONLY valid JSON:
@@ -442,8 +442,12 @@ ${formatExample}`;
                         ? `Analyze user message to update state and identify required tools.
 
 Rules:
-- Update state fields from message or keep previous values
-- Identify tools needed for missing state data
+- Extract information from the user message to fill missing or null state fields
+- If the user provides information that matches a state field description, update that field
+- If a field is null/missing and the user message contains relevant information, update it
+- Keep previous non-null values unless the user message explicitly changes them
+- Understand conversational context - if the user is answering a question, extract the answer into the appropriate field
+- Identify tools needed for missing state data that cannot be extracted from the message
 - For each tool: tool_name, reason, state_field, input_params
 
 Return ONLY valid JSON:
@@ -638,8 +642,12 @@ Provide a helpful and natural response.`;
                     const stateAnalysisSystemMessage = `Analyze user message to update state${useAgent ? ' and identify required tools' : ''}.
 
 Rules:
-- Update state fields from message or keep previous values
-${useAgent ? `- Identify tools needed for missing state data
+- Extract information from the user message to fill missing or null state fields
+- If the user provides information that matches a state field description, update that field
+- If a field is null/missing and the user message contains relevant information, update it
+- Keep previous non-null values unless the user message explicitly changes them
+- Understand conversational context - if the user is answering a question, extract the answer into the appropriate field
+${useAgent ? `- Identify tools needed for missing state data that cannot be extracted from the message
 - For each tool: tool_name, reason, state_field, input_params` : ''}
 
 Return ONLY valid JSON:
@@ -654,7 +662,9 @@ ${useAgent ? `Available Tools:
 {availableTools}
 ` : ''}${conversationHistory ? `Previous Conversation:
 {conversation_history}
-` : ''}User: {userMessage}`;
+` : ''}User: {userMessage}
+
+Analyze the user message and extract any information that matches the state field descriptions. If the user is providing information in response to a question, map it to the appropriate state field.`;
                     const stateAnalysisPrompt = prompts_1.ChatPromptTemplate.fromMessages([
                         ['system', stateAnalysisSystemMessage],
                         ['human', stateAnalysisHumanMessage],
