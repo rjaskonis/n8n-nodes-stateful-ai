@@ -7,7 +7,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import { RunnableSequence } from '@langchain/core/runnables';
-import { PromptTemplate } from '@langchain/core/prompts';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 
 
@@ -235,7 +235,8 @@ export class AIStateHandler implements INodeType {
 					.join("\n");
 
 				if (role !== 'user') {
-					const systemStatePrompt = PromptTemplate.fromTemplate(`
+					const systemStatePrompt = ChatPromptTemplate.fromMessages([
+						['system', `
 Update conversation state from system message.
 
 State Model:
@@ -257,7 +258,8 @@ Return ONLY valid JSON with all state model fields:
   "field1": "value1",
   "field2": "value2"
 }}
-`);
+`],
+					]);
 
 					const systemStateChain = RunnableSequence.from([
 						systemStatePrompt,
@@ -321,7 +323,8 @@ Return ONLY valid JSON with all state model fields:
 						`- ${tool.name}: ${tool.description || 'No description available'}`
 					).join("\n");
 
-					const stateAndToolsPrompt = PromptTemplate.fromTemplate(`
+					const stateAndToolsPrompt = ChatPromptTemplate.fromMessages([
+						['system', `
 Analyze user message to update state and identify required tools.
 
 State Model:
@@ -350,7 +353,8 @@ Return ONLY valid JSON:
   ],
   "fields_needing_post_analysis": ["field1", "field2"]
 }}
-`);
+`],
+					]);
 
 					const stateAndToolsChain = RunnableSequence.from([
 						stateAndToolsPrompt,
@@ -460,7 +464,8 @@ Target State Field: ${result.state_field || 'not specified'}
 Result: ${JSON.stringify(result.result || result.error, null, 2)}`
 						).join('\n\n');
 
-						const postToolStatePrompt = PromptTemplate.fromTemplate(`
+						const postToolStatePrompt = ChatPromptTemplate.fromMessages([
+							['system', `
 Update state from tool results.
 
 State Model:
@@ -484,7 +489,8 @@ Return ONLY valid JSON with all state model fields:
   "field1": "value1",
   "field2": "value2"
 }}
-`);
+`],
+						]);
 
 						const postToolStateChain = RunnableSequence.from([
 							postToolStatePrompt,

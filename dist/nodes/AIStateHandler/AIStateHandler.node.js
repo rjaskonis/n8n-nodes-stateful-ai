@@ -209,7 +209,8 @@ class AIStateHandler {
                     .map(([key, description]) => `- ${key}: ${description}`)
                     .join("\n");
                 if (role !== 'user') {
-                    const systemStatePrompt = prompts_1.PromptTemplate.fromTemplate(`
+                    const systemStatePrompt = prompts_1.ChatPromptTemplate.fromMessages([
+                        ['system', `
 Update conversation state from system message.
 
 State Model:
@@ -231,7 +232,8 @@ Return ONLY valid JSON with all state model fields:
   "field1": "value1",
   "field2": "value2"
 }}
-`);
+`],
+                    ]);
                     const systemStateChain = runnables_1.RunnableSequence.from([
                         systemStatePrompt,
                         llm,
@@ -283,7 +285,8 @@ Return ONLY valid JSON with all state model fields:
                 }
                 else {
                     const availableToolsDesc = agentTools.map(tool => `- ${tool.name}: ${tool.description || 'No description available'}`).join("\n");
-                    const stateAndToolsPrompt = prompts_1.PromptTemplate.fromTemplate(`
+                    const stateAndToolsPrompt = prompts_1.ChatPromptTemplate.fromMessages([
+                        ['system', `
 Analyze user message to update state and identify required tools.
 
 State Model:
@@ -312,7 +315,8 @@ Return ONLY valid JSON:
   ],
   "fields_needing_post_analysis": ["field1", "field2"]
 }}
-`);
+`],
+                    ]);
                     const stateAndToolsChain = runnables_1.RunnableSequence.from([
                         stateAndToolsPrompt,
                         llm,
@@ -400,7 +404,8 @@ Return ONLY valid JSON:
                         const toolResultsSummary = invokedToolResults.map(result => `Tool: ${result.tool_name}
 Target State Field: ${result.state_field || 'not specified'}
 Result: ${JSON.stringify(result.result || result.error, null, 2)}`).join('\n\n');
-                        const postToolStatePrompt = prompts_1.PromptTemplate.fromTemplate(`
+                        const postToolStatePrompt = prompts_1.ChatPromptTemplate.fromMessages([
+                            ['system', `
 Update state from tool results.
 
 State Model:
@@ -424,7 +429,8 @@ Return ONLY valid JSON with all state model fields:
   "field1": "value1",
   "field2": "value2"
 }}
-`);
+`],
+                        ]);
                         const postToolStateChain = runnables_1.RunnableSequence.from([
                             postToolStatePrompt,
                             llm,
