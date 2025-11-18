@@ -121,7 +121,58 @@ export class StatefulAIAgent implements INodeType {
 			cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '');
 			cleaned = cleaned.replace(/\n?```\s*$/, '');
 		}
-		return cleaned.trim();
+		cleaned = cleaned.trim();
+		
+		// Sanitize control characters in JSON string values
+		// We need to escape unescaped control characters that appear inside JSON strings
+		let sanitized = '';
+		let inString = false;
+		let escapeNext = false;
+		
+		for (let i = 0; i < cleaned.length; i++) {
+			const char = cleaned[i];
+			const charCode = char.charCodeAt(0);
+			
+			if (escapeNext) {
+				// Previous character was a backslash, this character is escaped
+				sanitized += char;
+				escapeNext = false;
+				continue;
+			}
+			
+			if (char === '\\') {
+				// This is an escape character
+				escapeNext = true;
+				sanitized += char;
+				continue;
+			}
+			
+			if (char === '"') {
+				// Toggle string state (quotes are only special when not escaped)
+				inString = !inString;
+				sanitized += char;
+				continue;
+			}
+			
+			if (inString && charCode >= 0x00 && charCode <= 0x1F) {
+				// Control character inside a string - escape it
+				// Common ones (\n, \r, \t) are usually fine in JSON, but we'll escape them to be safe
+				if (char === '\n') {
+					sanitized += '\\n';
+				} else if (char === '\r') {
+					sanitized += '\\r';
+				} else if (char === '\t') {
+					sanitized += '\\t';
+				} else {
+					// Escape other control characters as \uXXXX
+					sanitized += '\\u' + ('0000' + charCode.toString(16)).slice(-4);
+				}
+			} else {
+				sanitized += char;
+			}
+		}
+		
+		return sanitized.trim();
 	}
 
 	static prepareStateFieldsForTemplate(stateModel: Record<string, string>, state: Record<string, any>): Record<string, any> {

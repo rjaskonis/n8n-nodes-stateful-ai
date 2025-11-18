@@ -116,6 +116,16 @@ class AIStateHandler {
             return toolResult;
         }
     }
+    static formatStateModelDescription(stateModel) {
+        const descriptions = [];
+        for (const [key, value] of Object.entries(stateModel)) {
+            const description = typeof value === 'object' && value !== null
+                ? JSON.stringify(value)
+                : typeof value === 'string' ? value : String(value);
+            descriptions.push(`- ${key}: ${description}`);
+        }
+        return descriptions.join('\n');
+    }
     async execute() {
         const items = this.getInputData();
         const returnData = [];
@@ -215,9 +225,7 @@ class AIStateHandler {
                         prevStateModelOnly[key] = prevState[key];
                     }
                 }
-                const stateFieldDescriptions = Object.entries(stateModel)
-                    .map(([key, description]) => `- ${key}: ${description}`)
-                    .join("\n");
+                const stateFieldDescriptions = AIStateHandler.formatStateModelDescription(stateModel);
                 if (role !== 'user') {
                     const systemStatePrompt = prompts_1.ChatPromptTemplate.fromMessages([
                         ['system', `
@@ -409,7 +417,7 @@ Return ONLY valid JSON:
                             }
                         }
                     }
-                    const needsPostToolAnalysis = invokedToolResults.length > 0 && stateFieldsWithDependencies.size > 0;
+                    const needsPostToolAnalysis = invokedToolResults.length > 0;
                     if (needsPostToolAnalysis) {
                         const toolResultsSummary = invokedToolResults.map(result => `Tool: ${result.tool_name}
 Target State Field: ${result.state_field || 'not specified'}

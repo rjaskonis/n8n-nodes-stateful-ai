@@ -115,7 +115,47 @@ class StatefulAIAgent {
             cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '');
             cleaned = cleaned.replace(/\n?```\s*$/, '');
         }
-        return cleaned.trim();
+        cleaned = cleaned.trim();
+        let sanitized = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < cleaned.length; i++) {
+            const char = cleaned[i];
+            const charCode = char.charCodeAt(0);
+            if (escapeNext) {
+                sanitized += char;
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                escapeNext = true;
+                sanitized += char;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+                sanitized += char;
+                continue;
+            }
+            if (inString && charCode >= 0x00 && charCode <= 0x1F) {
+                if (char === '\n') {
+                    sanitized += '\\n';
+                }
+                else if (char === '\r') {
+                    sanitized += '\\r';
+                }
+                else if (char === '\t') {
+                    sanitized += '\\t';
+                }
+                else {
+                    sanitized += '\\u' + ('0000' + charCode.toString(16)).slice(-4);
+                }
+            }
+            else {
+                sanitized += char;
+            }
+        }
+        return sanitized.trim();
     }
     static prepareStateFieldsForTemplate(stateModel, state) {
         const result = {};

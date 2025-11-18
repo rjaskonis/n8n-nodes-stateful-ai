@@ -122,6 +122,20 @@ export class AIStateHandler implements INodeType {
 		}
 	}
 
+	static formatStateModelDescription(stateModel: Record<string, any>): string {
+		const descriptions: string[] = [];
+		
+		for (const [key, value] of Object.entries(stateModel)) {
+			// Convert value to string - if it's an object, stringify it
+			const description = typeof value === 'object' && value !== null
+				? JSON.stringify(value)
+				: typeof value === 'string' ? value : String(value);
+			descriptions.push(`- ${key}: ${description}`);
+		}
+		
+		return descriptions.join('\n');
+	}
+
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
@@ -242,9 +256,7 @@ export class AIStateHandler implements INodeType {
 					}
 				}
 
-				const stateFieldDescriptions = Object.entries(stateModel)
-					.map(([key, description]) => `- ${key}: ${description}`)
-					.join("\n");
+				const stateFieldDescriptions = AIStateHandler.formatStateModelDescription(stateModel);
 
 				if (role !== 'user') {
 					const systemStatePrompt = ChatPromptTemplate.fromMessages([
@@ -467,7 +479,9 @@ Return ONLY valid JSON:
 						}
 					}
 
-					const needsPostToolAnalysis = invokedToolResults.length > 0 && stateFieldsWithDependencies.size > 0;
+					// Always perform post-tool analysis when tools are invoked
+					// This ensures state is updated with tool results even if fields_needing_post_analysis wasn't specified
+					const needsPostToolAnalysis = invokedToolResults.length > 0;
 
 					if (needsPostToolAnalysis) {
 						const toolResultsSummary = invokedToolResults.map(result =>
